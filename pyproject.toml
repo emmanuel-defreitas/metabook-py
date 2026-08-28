@@ -1,6 +1,6 @@
 [project]
 name = "metabook-py"
-version = "0.1.0"
+version = "1.0.0"
 description = "metabook-py"
 readme = "README.md"
 authors = [{ name = "Emmanuel De Freitas", email = "manny.defreitas7@gmail.com" }]
