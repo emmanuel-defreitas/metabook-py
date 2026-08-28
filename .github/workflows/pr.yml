@@ -1,0 +1,121 @@
+# Everything that runs *before* a merge.
+#
+#   <type>/<slug>  ->  dev               guard + check + AI review
+#   <type>/<slug>  ->  release/vX.Y.Z    same (last-minute fixes on an in-flight release)
+#   dev            ->  next              guard + check
+#   release/vX.Y.Z -> main               guard + check + package artifact
+#
+# Draft PRs only get the guard. The full suite starts at `ready_for_review`
+# and re-runs on every push after that. The promote PR (dev → next) is opened
+# ready, not draft, so check can run and auto-merge can land.
+name: PR
+
+on:
+  pull_request:
+    types: [ opened, reopened, ready_for_review, synchronize ]
+    # No `branches` filter: the guard job validates the base. A filter here
+    # would silently skip stacked PRs (whose immediate base is a feature
+    # branch, not dev/main/next/release) — they'd get no guard, no check,
+    # no review, and sit invisibly red.
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Passed as environment, never interpolated into the shell: a PR title is
+      # attacker-controlled text.
+      #
+      # `event.pull_request.base.ref`, NOT `github.base_ref`: when a PR is part
+      # of a GitHub stack, `github.base_ref` reports the stack's ultimate base
+      # rather than the PR's own parent. Feature PRs into `dev` stacked on a
+      # release PR into `main` would otherwise look like they target `main`.
+      - name: Check base, branch name and title
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD: ${{ github.head_ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: make pr-guard
+
+  check:
+    name: check
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: make ci
+
+  # The release PR's third gate is the publishable artifact itself. If `uv
+  # build` cannot produce the wheel here, the publish would fail after the
+  # merge, on protected main.
+  package:
+    name: package
+    # See the guard job for why this is not `github.base_ref`.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.base.ref == 'main' }}
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: make pack
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: metabook-py-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  review:
+    name: review
+    # `needs: guard` is the single gate for base validity — the guard's
+    # <type>/<slug> case covers stacked PRs (base is another feature branch),
+    # so there's no base-ref allowlist to maintain here. Runs on any non-draft
+    # PR whose base passed the guard.
+    needs: guard
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write # the review is posted through the issue-comments API
+      actions: write # lets the review read this PR's CI results
+      id-token: write
+    env:
+      # The `secrets` context cannot be referenced from an `if:` — GitHub rejects
+      # the whole file with "Unrecognized named-value: 'secrets'". Mapping it to a
+      # job-level env var makes it reachable from a step-level `if:`. Only
+      # emptiness is ever tested; the value is never printed.
+      CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A permanently-red check that means "unconfigured" is worse than no
+      # check — it trains everyone to merge past red. Skip loudly instead.
+      - name: Note that review is unconfigured
+        if: ${{ env.CLAUDE_TOKEN == '' }}
+        run: |
+          {
+            echo "### Review skipped"
+            echo
+            echo "\`CLAUDE_CODE_OAUTH_TOKEN\` is not set on this repository."
+            echo "Add it under **Settings → Secrets and variables → Actions**."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Light AI review
+        if: ${{ env.CLAUDE_TOKEN != '' }}
+        uses: anthropics/claude-code-action@bd4488507006939d8b3b7f098a2231b36e22f8c1 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: "/code-review:code-review --comment https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+          allowed_bots: "*"

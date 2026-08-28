@@ -1,0 +1,80 @@
+# Daily (and on-demand) promotion: open a PR from `dev` into `next`.
+#
+# Version comes from line-count churn between `next` and `dev` unless the
+# dispatcher overrides it. The PR auto-merges once `guard` and `check` pass;
+# pushing `next` then cuts `release/vX.Y.Z` (see next.yml).
+#
+# Schedule workflows are read from the default branch (`main`). This file
+# does not fire on a cron until it has shipped there.
+name: Promote to next
+
+on:
+  schedule:
+    - cron: "0 22 * * *" # 22:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Bump for the release that will be cut from next (auto = from line count)
+        default: auto
+        type: choice
+        options: [auto, major, minor, patch]
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: promote
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Open or refresh the promote PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          BUMP_INPUT: ${{ inputs.bump || 'auto' }}
+        run: |
+          set -eu
+          git config user.name  "metabook-automation[bot]"
+          git config user.email "metabook-automation[bot]@users.noreply.github.com"
+
+          make bootstrap-lanes
+          git fetch --quiet --force origin \
+            +refs/heads/dev:refs/remotes/origin/dev \
+            +refs/heads/next:refs/remotes/origin/next \
+            +refs/heads/main:refs/remotes/origin/main
+
+          info="$(make -s --no-print-directory churn-info FROM=origin/next TO=origin/dev)"
+          auto_bump="$(printf '%s\n' "$info" | awk '{print $1}')"
+          churn="$(printf '%s\n' "$info" | awk '{print $4}')"
+          if [ "$BUMP_INPUT" = auto ]; then
+            bump="$auto_bump"
+          else
+            bump="$BUMP_INPUT"
+          fi
+          version="$(make -s --no-print-directory next-version BUMP="$bump")"
+
+          {
+            echo "### Promote"
+            echo
+            echo "- bump: \`$bump\` (input \`$BUMP_INPUT\`, auto \`$auto_bump\`)"
+            echo "- churn: $churn lines"
+            echo "- version: v$version"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          make promote-pr VERSION="$version" BUMP="$bump" CHURN="$churn"

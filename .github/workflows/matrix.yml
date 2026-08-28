@@ -1,0 +1,58 @@
+# Cross-platform, cross-version coverage.
+#
+# `check` in pr.yml is deliberately a single job on one runner: it is a
+# required status check on main, and a matrixed job reports contexts like
+# "check (macos-latest, 3.14)" rather than the plain "check" the ruleset names,
+# which would leave every PR unmergeable. This workflow keeps the breadth an
+# os x Python matrix needs — ubuntu + macOS across the supported Python
+# versions — where it does not collide with a required context:
+#
+#   * every push to `next` or a release branch, so a macOS- or 3.14-only break
+#     surfaces on staging / the in-flight RC rather than on the release PR;
+#   * weekly, to catch upstream dependency drift on an untouched tree;
+#   * on demand.
+name: Matrix
+
+on:
+  push:
+    branches:
+      - next
+      - "release/v*"
+  schedule:
+    # Every Sunday at 8:05 UTC.
+    - cron: "5 8 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+        python-version: [ "3.13", "3.14" ]
+
+    # uv provisions the matrix Python itself, overriding .python-version.
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - run: make ci

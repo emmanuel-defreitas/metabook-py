@@ -1,0 +1,68 @@
+# Ships the metabook-py wheel to PyPI.
+#
+# Tag-driven only. The version is chosen once, when `make release-branch`
+# cuts release/vX.Y.Z and writes X.Y.Z into pyproject.toml. By the time a tag
+# exists, `make tag-release` (release.yml) has already created it from that
+# version. Nothing here needs to bump anything.
+#
+# The tag MUST be pushed with the automation App's token, which is what
+# release.yml does: events raised by GITHUB_TOKEN do not start workflow runs,
+# so a GITHUB_TOKEN-created tag would leave this workflow silently dead.
+#
+# The filename is load-bearing: PyPI trusted publishing is bound to the
+# workflow file `publish.yml` plus the `pypi` environment. Renaming this file
+# breaks OIDC until the publisher is re-pointed on PyPI.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+" # e.g. v1.2.3
+      - "v[0-9]+.[0-9]+.[0-9]+-*" # e.g. v1.2.3-rc1
+
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI (otherwise this only builds the wheel)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# ── jobs ──────────────────────────────────────────────────────────────────────
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build
+        uses: ./.github/actions/build-dist
+
+  # Publishes the metabook-py wheel to PyPI. Uses OIDC trusted publishing —
+  # no stored token. Requires a "pypi" trusted publisher configured on PyPI
+  # for this repo before it will succeed.
+  publish:
+    name: Publish Python 🐍 distributions 📦 to PyPI
+    needs: [ build ]
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/metabook-py
+    permissions:
+      actions: read
+      id-token: write # mandatory for OIDC trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Publish
+        uses: ./.github/actions/publish-pypi

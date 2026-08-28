@@ -1,0 +1,66 @@
+# The release branch was cut or refreshed from `next`. Keep its draft PR
+# into main up to date.
+#
+# Triggered by `push`, not `pull_request: [closed]`. This repo's PRs form a
+# GitHub stack (<type>/<slug> -> release/vX.Y.Z -> main), and for a stacked PR
+# GitHub matches `on.pull_request.branches` against the stack's *ultimate* base
+# (main) rather than the PR's own parent, so a `release/v*` filter would never
+# match and this workflow would silently never run — a merged feature would
+# leave the release notes stale with nothing to show it had been skipped. A
+# push filter matches the ref that actually moved, which is not rewritten.
+#
+# The same rewriting is why pr.yml reads `event.pull_request.base.ref` instead
+# of `github.base_ref`; unlike an expression, a trigger filter cannot be worked
+# around, which is what forces the change of event here.
+#
+# Branch cleanup is deliberately absent: a push carries no head branch to
+# delete. The repository's "Automatically delete head branches" setting is what
+# removes a merged PR's branch.
+#
+# Runs as the automation GitHub App rather than GITHUB_TOKEN: a PR opened with
+# GITHUB_TOKEN cannot trigger further workflows, so the release PR's own
+# guard/check/package would never start — and those are the required checks on
+# main, so the PR would be permanently unmergeable.
+name: Release branch updated
+
+on:
+  push:
+    branches:
+      - "release/v*"
+
+# Two features merging at once must not both rewrite the release PR body.
+concurrency:
+  group: release-pr-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  wrapup:
+    name: wrapup
+    # Deleting a release branch also delivers a push; there is nothing to
+    # refresh then, and `make release-pr` would fetch a ref that is gone.
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
+      # Full history: the release notes are a `git log main..release/vX.Y.Z`.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Opens the PR when the branch is first cut and refreshes it on every
+      # later push — `make release-pr` handles both.
+      - name: Open or refresh the release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: make release-pr

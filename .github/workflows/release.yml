@@ -1,0 +1,99 @@
+# A release PR landed on main: tag it, then sync `next` and `dev`.
+#
+# Nothing is re-tested here — the exact tree being released already passed
+# `check` and `package` on the release PR.
+#
+# There is no deploy job here by default. Everything downstream hangs off the
+# tag `make tag-release` pushes: publish.yml sends the wheel to PyPI. That is
+# a `push: tags: v*` workflow, and events raised by GITHUB_TOKEN do not start
+# workflow runs — so the tag MUST be created with the automation App's token
+# or it goes silently dead.
+#
+# The dispatch is the bootstrap: it creates `dev` and `next` without a
+# preceding tag. The next versioned release is cut by **Promote to next**,
+# not from this file.
+name: Release
+
+on:
+  pull_request:
+    types: [ closed ]
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+      && startsWith(github.head_ref, 'release/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
+      # Full history: `gh release --generate-notes` needs the preceding tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: make tag-release
+
+      - name: Delete the release branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref }}
+        run: make delete-branch
+
+  wrapup:
+    name: wrapup
+    needs: [ release ]
+    # `release` is skipped on a manual dispatch, which is the bootstrap case —
+    # so run whenever it did not actually fail.
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Sync lanes and clean up
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          git config user.name  "metabook-automation[bot]"
+          git config user.email "metabook-automation[bot]@users.noreply.github.com"
+          make bootstrap-lanes
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            make sync-lanes
+            make cleanup-cycle
+          fi

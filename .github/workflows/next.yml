@@ -1,0 +1,48 @@
+# `next` moved: cut/refresh `release/vX.Y.Z`.
+#
+# `pr.yml` already ran the full suite on the promote PR, so this only versions.
+# Pushing the release branch is what starts pr-merged.yml, which opens or
+# refreshes the draft PR into main.
+name: Next
+
+on:
+  push:
+    branches:
+      - next
+  workflow_dispatch:
+
+concurrency:
+  group: next
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cut-release:
+    name: cut-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      # `make cut-release` re-locks: uv.lock pins the workspace versions.
+      - uses: ./.github/actions/setup
+
+      - name: Cut or refresh the release branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          git config user.name  "metabook-automation[bot]"
+          git config user.email "metabook-automation[bot]@users.noreply.github.com"
+          make cut-release
