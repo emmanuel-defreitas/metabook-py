@@ -1,14 +1,22 @@
 # metabook-py
 
-Scaffolded from [exegia/corpora-py](https://github.com/exegia/corpora-py)'s CI/release pipeline: same branch model, GitHub Actions workflows, composite actions, and `make`-driven release automation. Only the app code is missing — this repo is plumbing-only until source is added.
+Book Structure API — analyses the structural metadata of Project Gutenberg books. Given a title, ISBN, or Gutenberg ID, it locates the book via [Gutendex](https://gutendex.com), downloads and cleans the text, detects its structural schema (scripture, sectioned book, standard book, essay collection, or flat), and returns counts of chapters, paragraphs, sentences, and words per node. **No book text is ever included in a response.**
 
-## Status
+Two interfaces share the same service layer:
 
-This is a **scaffold**. There is no `src/` package yet, so `make ci` / `make pack` will fail until you:
+- **REST API** (FastAPI) — `GET /api/books/structure`, `GET /api/books/structure/schemas`, `GET /health`; docs at `/api/docs`
+- **MCP server** (FastMCP) — mounted at `/mcp` with tools `search_book_structure` and `list_supported_schemas`
 
-1. Add your package source and point `[tool.hatch.build.targets.wheel]` in `pyproject.toml` at it (currently `src/metabook_py`).
-2. Add tests under `tests/`.
-3. Run `make setup` to install dependencies.
+## Quick start
+
+```bash
+make setup              # install dependencies (uv sync)
+make dev                # run the API with auto-reload on :8000
+make test               # run the test suite
+make docker-up          # or run it via docker compose
+```
+
+CI/release pipeline scaffolded from [exegia/corpora-py](https://github.com/exegia/corpora-py): same branch model, GitHub Actions workflows, composite actions, and `make`-driven release automation.
 
 ## Branching and release
 
