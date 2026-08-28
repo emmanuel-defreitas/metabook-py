@@ -67,6 +67,24 @@ mypy: ## Run mypy type checker.
 test: ## Run pytest.
 	@uv run pytest -vv
 
+# ── Run & Docker ──────────────────────────────────────────────────────────────
+
+.PHONY: dev
+dev: ## Run the API locally with auto-reload.
+	@uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port 8000
+
+.PHONY: docker-build
+docker-build: ## Build the Docker image.
+	@docker build -t metabook-py .
+
+.PHONY: docker-up
+docker-up: ## Start the API via docker compose (detached).
+	@docker compose up -d
+
+.PHONY: docker-down
+docker-down: ## Stop the docker compose stack.
+	@docker compose down
+
 # ── Publish (PyPI via GitHub Actions) ─────────────────────────────────────────
 
 .PHONY: publish
