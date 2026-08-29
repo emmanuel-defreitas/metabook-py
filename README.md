@@ -5,7 +5,7 @@ Book Structure API — analyses the structural metadata of books. Given a title,
 Two interfaces share the same service layer:
 
 - **REST API** (FastAPI) — `GET /api/books/structure`, `GET /api/books/structure/schemas`, `POST /api/books/upload`, `GET /health`; docs at `/api/docs`
-- **MCP server** (FastMCP) — mounted at `/mcp` with tools `search_book_structure` and `list_supported_schemas`
+- **MCP server** (FastMCP) — mounted at `/mcp` with tools `search_book_structure`, `upload_book_epub` (accepts the EPUB as base64 or a URL), and `list_supported_schemas`
 
 ## Quick start
 
