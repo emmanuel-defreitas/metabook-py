@@ -23,6 +23,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::resizable::{h_resizable, resizable_panel};
+use gpui_component::select::{Select, SelectState};
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
@@ -35,6 +36,10 @@ use crate::api::{self, BookMatch, SearchOutcome, TreeNode};
 
 const TAB_SEARCH: usize = 0;
 const TAB_UPLOAD: usize = 1;
+
+/// Options for the detail Select, index-aligned with `DETAIL_VALUES`.
+const DETAIL_OPTIONS: [&str; 4] = ["Paragraphs", "Sentences", "Clauses", "Words"];
+const DETAIL_VALUES: [&str; 4] = ["paragraph", "sentence", "clause", "word"];
 
 /// The workflow phase shown in the content region.
 enum Phase {
@@ -61,6 +66,7 @@ pub struct MetabookApp {
     tab_ix: usize,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
+    detail: Entity<SelectState<Vec<&'static str>>>,
     epub_path: Option<PathBuf>,
     phase: Phase,
     /// Incremented per request; responses for an older index are discarded.
@@ -82,6 +88,16 @@ impl MetabookApp {
             InputState::new(window, cx).placeholder("Title or author, e.g. Pride and Prejudice")
         });
         let isbn = cx.new(|cx| InputState::new(window, cx).placeholder("ISBN-10 or ISBN-13"));
+        // Default to sentence detail so the deeper nesting is visible without
+        // requesting word-level nodes for every large book up front.
+        let detail = cx.new(|cx| {
+            SelectState::new(
+                DETAIL_OPTIONS.to_vec(),
+                Some(gpui_component::IndexPath::new(1)),
+                window,
+                cx,
+            )
+        });
 
         let subscriptions = vec![
             cx.subscribe_in(&query, window, Self::on_input_event),
@@ -93,6 +109,7 @@ impl MetabookApp {
             tab_ix: TAB_SEARCH,
             query,
             isbn,
+            detail,
             epub_path: None,
             phase: Phase::Idle,
             request_ix: 0,
@@ -116,6 +133,21 @@ impl MetabookApp {
         matches!(self.phase, Phase::Processing { .. })
     }
 
+    /// The API `detail` value for the current Select choice.
+    fn detail_value(&self, cx: &Context<Self>) -> String {
+        self.detail
+            .read(cx)
+            .selected_value()
+            .and_then(|label| {
+                DETAIL_OPTIONS
+                    .iter()
+                    .position(|o| o == label)
+                    .map(|ix| DETAIL_VALUES[ix])
+            })
+            .unwrap_or("paragraph")
+            .to_string()
+    }
+
     // ── Commands ───────────────────────────────────────────────────────────────
 
     fn start_search(&mut self, cx: &mut Context<Self>) {
@@ -133,9 +165,10 @@ impl MetabookApp {
         }
 
         let base = self.api_base.to_string();
+        let detail = self.detail_value(cx);
         self.begin_request(
             "Searching Gutendex…",
-            move || api::search(&base, &query, &isbn),
+            move || api::search(&base, &query, &isbn, &detail),
             cx,
         );
     }
@@ -145,9 +178,10 @@ impl MetabookApp {
             return;
         }
         let base = self.api_base.to_string();
+        let detail = self.detail_value(cx);
         self.begin_request(
             "Fetching and scanning the book text…",
-            move || api::fetch_by_id(&base, gutenberg_id).map(SearchOutcome::Analysis),
+            move || api::fetch_by_id(&base, gutenberg_id, &detail).map(SearchOutcome::Analysis),
             cx,
         );
     }
@@ -161,9 +195,10 @@ impl MetabookApp {
         };
 
         let base = self.api_base.to_string();
+        let detail = self.detail_value(cx);
         self.begin_request(
             "Uploading and scanning the EPUB…",
-            move || api::upload(&base, &path).map(SearchOutcome::Analysis),
+            move || api::upload(&base, &path, &detail).map(SearchOutcome::Analysis),
             cx,
         );
     }
@@ -312,6 +347,7 @@ impl MetabookApp {
             .items_center()
             .child(div().flex_1().child(Input::new(&self.query)))
             .child(div().w_48().child(Input::new(&self.isbn)))
+            .child(div().w_40().child(Select::new(&self.detail)))
             .child(
                 Button::new("search")
                     .primary()
@@ -352,6 +388,7 @@ impl MetabookApp {
                     .text_color(cx.theme().muted_foreground)
                     .child(chosen),
             )
+            .child(div().w_40().child(Select::new(&self.detail)))
             .child(
                 Button::new("analyze")
                     .primary()
