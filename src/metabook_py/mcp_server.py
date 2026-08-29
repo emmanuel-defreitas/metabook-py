@@ -1,9 +1,10 @@
 """
 FastMCP server.
 
-Exposes two tools that wrap the exact same service layer used by the REST API:
+Exposes three tools that wrap the exact same service layer used by the REST API:
 
   search_book_structure  — find a book and return its structural metadata
+  upload_book_epub       — upload an EPUB (base64 or URL) and analyse it
   list_supported_schemas — enumerate the schema types the detector understands
 
 Mounting
@@ -19,12 +20,25 @@ call:
     python -c "import asyncio; from metabook_py.mcp_server import mcp; mcp.run()"
 """
 
+import base64
+import binascii
+
+import httpx
 from fastmcp import FastMCP
 
-from metabook_py.core.exceptions import AmbiguousBookError, BookNotFoundError, TextUnavailableError
+from metabook_py.core.config import settings
+from metabook_py.core.exceptions import (
+    AmbiguousBookError,
+    BlobUploadError,
+    BookNotFoundError,
+    InvalidEpubError,
+    TextUnavailableError,
+)
+from metabook_py.services.blob import upload_epub
 from metabook_py.services.counter import build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
 from metabook_py.services.discovery import GutendexClient
+from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
 
 mcp = FastMCP(
@@ -32,6 +46,7 @@ mcp = FastMCP(
     instructions=(
         "Use 'search_book_structure' to analyse the structural metadata of any "
         "Project Gutenberg book by title, ISBN, or Gutenberg ID. "
+        "Use 'upload_book_epub' to store and analyse your own EPUB file. "
         "Use 'list_supported_schemas' to see which structural types are recognised."
     ),
 )
@@ -108,6 +123,87 @@ async def search_book_structure(
             "nodes": [n.model_dump() for n in nodes],
         },
         "cached": was_cached,
+    }
+
+
+@mcp.tool()
+async def upload_book_epub(
+    filename: str = "book.epub",
+    epub_base64: str | None = None,
+    epub_url: str | None = None,
+    include_paragraphs: bool = True,
+) -> dict:
+    """
+    Upload an EPUB, store it in Vercel Blob storage (books/ folder), and
+    return its structural metadata — the same analysis as search_book_structure
+    but for a caller-supplied file.
+
+    Provide the EPUB one of two ways (exactly one is required):
+
+    epub_base64        the EPUB file's bytes, base64-encoded
+    epub_url           a URL to download the EPUB from
+
+    Parameters
+    ----------
+    filename           name to store the file under (default "book.epub")
+    include_paragraphs Include per-paragraph node detail (default True;
+                       set False for a summary-only response on large books)
+
+    Metadata (title, authors, language, subjects, ISBN) is extracted from the
+    EPUB's package document. No actual book text is returned.
+    """
+    if (epub_base64 is None) == (epub_url is None):
+        return {"error": "Provide exactly one of: epub_base64, epub_url."}
+
+    if epub_base64 is not None:
+        try:
+            content = base64.b64decode(epub_base64, validate=True)
+        except (binascii.Error, ValueError):
+            return {"error": "invalid_base64", "hint": "epub_base64 is not valid base64."}
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                resp = await client.get(epub_url)  # type: ignore[arg-type]
+                resp.raise_for_status()
+                content = resp.content
+        except httpx.HTTPError as exc:
+            return {"error": "download_failed", "url": epub_url, "detail": str(exc)}
+
+    if len(content) > settings.max_upload_bytes:
+        return {"error": "file_too_large", "max_bytes": settings.max_upload_bytes}
+
+    try:
+        parsed = parse_epub(content)
+    except InvalidEpubError as exc:
+        return {"error": "invalid_epub", "detail": exc.reason}
+
+    try:
+        blob = await upload_epub(filename, content)
+    except BlobUploadError as exc:
+        return {"error": "blob_upload_failed", "detail": exc.reason}
+
+    schema = detect_schema(parsed.text)
+    nodes, summary = build_structure_tree(
+        parsed.text, schema, include_paragraphs=include_paragraphs
+    )
+
+    return {
+        "book": {
+            "source": "upload",
+            "title": parsed.metadata.title,
+            "authors": parsed.metadata.authors,
+            "language": parsed.metadata.language,
+            "subjects": parsed.metadata.subjects,
+            "isbn": parsed.metadata.isbn,
+        },
+        "blob": {"url": blob.url, "pathname": blob.pathname, "size_bytes": blob.size},
+        "structure": {
+            "schema": schema.name.value,
+            "schema_confidence": schema.confidence,
+            "summary": summary.model_dump(),
+            "nodes": [n.model_dump() for n in nodes],
+        },
+        "spine_document_count": parsed.spine_document_count,
     }
 
 
