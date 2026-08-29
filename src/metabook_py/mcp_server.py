@@ -36,7 +36,7 @@ from metabook_py.core.exceptions import (
     TextUnavailableError,
 )
 from metabook_py.services.blob import upload_epub
-from metabook_py.services.counter import build_structure_tree
+from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
@@ -60,6 +60,7 @@ async def search_book_structure(
     gutenberg_id: int | None = None,
     language: str = "en",
     include_paragraphs: bool = True,
+    detail: str = "paragraph",
 ) -> dict:
     """
     Find a book on Project Gutenberg and return its full structural metadata.
@@ -76,9 +77,14 @@ async def search_book_structure(
     language           ISO 639-1 code (default "en")
     include_paragraphs Include per-paragraph node detail (default True;
                        set False for a summary-only response on large books)
+    detail             Leaf nesting depth: "paragraph" (default), "sentence",
+                       "clause", or "word" — deeper levels nest sentence,
+                       clause, and word nodes (counts only, never text)
     """
     if not any([title, isbn, gutenberg_id]):
         return {"error": "Provide at least one of: title, isbn, gutenberg_id."}
+    if detail not in DETAIL_LEVELS:
+        return {"error": "invalid_detail", "allowed": list(DETAIL_LEVELS)}
 
     client = GutendexClient()
 
@@ -123,7 +129,9 @@ async def search_book_structure(
         }
 
     schema = detect_schema(text)
-    nodes, summary = build_structure_tree(text, schema, include_paragraphs=include_paragraphs)
+    nodes, summary = build_structure_tree(
+        text, schema, include_paragraphs=include_paragraphs, detail=detail
+    )
 
     return {
         "book": book_info.model_dump(),
@@ -143,6 +151,7 @@ async def upload_book_epub(
     epub_base64: str | None = None,
     epub_url: str | None = None,
     include_paragraphs: bool = True,
+    detail: str = "paragraph",
 ) -> dict:
     """
     Upload an EPUB, store it in Vercel Blob storage (books/ folder), and
@@ -165,6 +174,8 @@ async def upload_book_epub(
     """
     if (epub_base64 is None) == (epub_url is None):
         return {"error": "Provide exactly one of: epub_base64, epub_url."}
+    if detail not in DETAIL_LEVELS:
+        return {"error": "invalid_detail", "allowed": list(DETAIL_LEVELS)}
 
     if epub_base64 is not None:
         try:
@@ -195,7 +206,7 @@ async def upload_book_epub(
 
     schema = detect_schema(parsed.text)
     nodes, summary = build_structure_tree(
-        parsed.text, schema, include_paragraphs=include_paragraphs
+        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail
     )
 
     return {
