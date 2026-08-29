@@ -37,7 +37,7 @@ from metabook_py.models.structure import (
     UploadMetaInfo,
 )
 from metabook_py.services.blob import upload_epub
-from metabook_py.services.counter import build_structure_tree
+from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
@@ -54,6 +54,17 @@ def get_gutendex_client() -> GutendexClient:
 
 
 GutendexDep = Annotated[GutendexClient, Depends(get_gutendex_client)]
+
+
+def _validate_detail(detail: str) -> None:
+    if detail not in DETAIL_LEVELS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_detail",
+                "allowed": list(DETAIL_LEVELS),
+            },
+        )
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -90,6 +101,10 @@ async def get_book_structure(
     include_paragraphs: bool = Query(
         True, description="Include per-paragraph node detail in the response"
     ),
+    detail: str = Query(
+        "paragraph",
+        description="Leaf nesting depth: paragraph | sentence | clause | word",
+    ),
 ) -> BookStructureResponse:
     """
     Locate a book on Project Gutenberg via the Gutendex API, download and
@@ -105,6 +120,7 @@ async def get_book_structure(
             status_code=422,
             detail="At least one of 'title', 'isbn', or 'gutenberg_id' is required.",
         )
+    _validate_detail(detail)
 
     t0 = time.monotonic()
 
@@ -150,7 +166,9 @@ async def get_book_structure(
     schema = detect_schema(text)
 
     # ── 4. Build metadata tree ─────────────────────────────────────────────────
-    nodes, summary = build_structure_tree(text, schema, include_paragraphs=include_paragraphs)
+    nodes, summary = build_structure_tree(
+        text, schema, include_paragraphs=include_paragraphs, detail=detail
+    )
 
     processing_ms = int((time.monotonic() - t0) * 1000)
 
@@ -186,6 +204,10 @@ async def upload_book(
     include_paragraphs: bool = Query(
         True, description="Include per-paragraph node detail in the response"
     ),
+    detail: str = Query(
+        "paragraph",
+        description="Leaf nesting depth: paragraph | sentence | clause | word",
+    ),
 ) -> BookUploadResponse:
     """
     Upload an EPUB, store it in Vercel Blob storage (`books/` folder), then
@@ -195,6 +217,7 @@ async def upload_book(
 
     **No actual text content is included in the response.**
     """
+    _validate_detail(detail)
     filename = file.filename or "book.epub"
     if not filename.lower().endswith(".epub"):
         raise HTTPException(
@@ -235,7 +258,7 @@ async def upload_book(
     # ── 3. Detect schema + build metadata tree ─────────────────────────────────
     schema = detect_schema(parsed.text)
     nodes, summary = build_structure_tree(
-        parsed.text, schema, include_paragraphs=include_paragraphs
+        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail
     )
 
     processing_ms = int((time.monotonic() - t0) * 1000)
