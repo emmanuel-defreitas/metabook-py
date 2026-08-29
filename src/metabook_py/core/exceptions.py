@@ -14,6 +14,16 @@ class AmbiguousBookError(Exception):
         super().__init__(f"Ambiguous query: {len(matches)} books matched")
 
 
+class GutendexUnavailableError(Exception):
+    """Raised when the Gutendex API cannot be reached (timeout, connection
+    failure, or a non-2xx response from Gutendex itself)."""
+
+    def __init__(self, reason: str, *, timed_out: bool = False):
+        self.reason = reason
+        self.timed_out = timed_out
+        super().__init__(f"Gutendex unreachable: {reason}")
+
+
 class TextUnavailableError(Exception):
     """Raised when the Gutenberg download URL fails or returns no usable content."""
 
