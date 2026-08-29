@@ -17,6 +17,16 @@ pub struct Analysis {
     pub title: String,
     /// Pretty-printed JSON of the full API response.
     pub schema_json: String,
+    /// The structure nodes as a plain label tree (no book text).
+    pub tree: Vec<TreeNode>,
+}
+
+/// One node of the structural tree: a part/book, chapter, or verse/paragraph.
+pub struct TreeNode {
+    /// Stable path id, e.g. "n0.c2.p5".
+    pub id: String,
+    pub label: String,
+    pub children: Vec<TreeNode>,
 }
 
 /// One candidate from a search that matched several books.
@@ -37,7 +47,7 @@ pub enum SearchOutcome {
 /// GET /api/books/structure — search Project Gutenberg by title/author or ISBN.
 pub fn search(base: &str, query: &str, isbn: &str) -> Result<SearchOutcome, String> {
     let mut request = ureq::get(&format!("{base}/api/books/structure"))
-        .query("include_paragraphs", "false")
+        .query("include_paragraphs", "true")
         .timeout(TIMEOUT);
     if !query.is_empty() {
         request = request.query("title", query);
@@ -58,7 +68,7 @@ pub fn search(base: &str, query: &str, isbn: &str) -> Result<SearchOutcome, Stri
 /// GET /api/books/structure?gutenberg_id=… — analyse one selected match.
 pub fn fetch_by_id(base: &str, gutenberg_id: u64) -> Result<Analysis, String> {
     let request = ureq::get(&format!("{base}/api/books/structure"))
-        .query("include_paragraphs", "false")
+        .query("include_paragraphs", "true")
         .query("gutenberg_id", &gutenberg_id.to_string())
         .timeout(TIMEOUT);
 
@@ -81,7 +91,7 @@ pub fn upload(base: &str, path: &Path) -> Result<Analysis, String> {
     let (body, content_type) = multipart_body(&filename, &bytes);
 
     let result = ureq::post(&format!("{base}/api/books/upload"))
-        .query("include_paragraphs", "false")
+        .query("include_paragraphs", "true")
         .set("Content-Type", &content_type)
         .timeout(TIMEOUT)
         .send_bytes(&body);
@@ -125,9 +135,95 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
         .as_str()
         .unwrap_or("Untitled")
         .to_string();
+    let tree = build_tree(&value["structure"]);
     let schema_json = serde_json::to_string_pretty(&value).unwrap_or(text);
 
-    Ok(Analysis { title, schema_json })
+    Ok(Analysis { title, schema_json, tree })
+}
+
+// ── Structure → label tree ─────────────────────────────────────────────────────
+//
+// Node shapes from the API (models/structure.py):
+//   PartNode      {level, index, label, children: [ChapterNode]}
+//   ChapterNode   {level, index, label, paragraphs: [ParagraphNode] | null}
+//   ParagraphNode {index, sentence_count, word_count}
+// canonical_scripture leaves are verses; every other schema's leaves are
+// paragraphs. Labels never contain book text.
+
+fn build_tree(structure: &Value) -> Vec<TreeNode> {
+    let leaf_name = if structure["schema"].as_str() == Some("canonical_scripture") {
+        "Verse"
+    } else {
+        "Paragraph"
+    };
+
+    let Some(nodes) = structure["nodes"].as_array() else {
+        return Vec::new();
+    };
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(ix, node)| top_node(node, ix, leaf_name))
+        .collect()
+}
+
+fn top_node(node: &Value, ix: usize, leaf_name: &str) -> TreeNode {
+    let id = format!("n{ix}");
+    if let Some(children) = node["children"].as_array() {
+        // Part / volume / section / book
+        TreeNode {
+            label: node_label(node, "Section"),
+            children: children
+                .iter()
+                .enumerate()
+                .map(|(cx_ix, c)| chapter_node(c, &id, cx_ix, leaf_name))
+                .collect(),
+            id,
+        }
+    } else if node["paragraph_count"].is_number() {
+        chapter_node(node, "n", ix, leaf_name)
+    } else {
+        leaf_node(node, &id, leaf_name)
+    }
+}
+
+fn chapter_node(node: &Value, parent_id: &str, ix: usize, leaf_name: &str) -> TreeNode {
+    let id = format!("{parent_id}.c{ix}");
+    let children = node["paragraphs"]
+        .as_array()
+        .map(|paragraphs| {
+            paragraphs
+                .iter()
+                .map(|p| leaf_node(p, &id, leaf_name))
+                .collect()
+        })
+        .unwrap_or_default();
+    TreeNode {
+        label: node_label(node, "Chapter"),
+        children,
+        id,
+    }
+}
+
+fn leaf_node(node: &Value, parent_id: &str, leaf_name: &str) -> TreeNode {
+    let index = node["index"].as_u64().unwrap_or(0);
+    let sentences = node["sentence_count"].as_u64().unwrap_or(0);
+    let words = node["word_count"].as_u64().unwrap_or(0);
+    TreeNode {
+        id: format!("{parent_id}.{leaf_name}{index}"),
+        label: format!("{leaf_name} {index} — {sentences} sentences · {words} words"),
+        children: Vec::new(),
+    }
+}
+
+fn node_label(node: &Value, fallback_kind: &str) -> String {
+    if let Some(label) = node["label"].as_str() {
+        if !label.trim().is_empty() {
+            return label.trim().to_string();
+        }
+    }
+    let kind = node["level"].as_str().unwrap_or(fallback_kind);
+    format!("{kind} {}", node["index"].as_u64().unwrap_or(0))
 }
 
 fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
