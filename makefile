@@ -210,9 +210,9 @@ pr-guard: ## Validate a PR's base, branch name and title (env: BASE, HEAD, TITLE
 
 ci: dep-sync lint-check test ## Everything CI runs on a pull request.
 
-pack: ## Build the publishable wheel (the artifact CI uploads).
-	@uv build --wheel --out-dir $(DIST_DIR)
-	@ls -lh $(DIST_DIR)/*.whl
+pack: ## Build the publishable sdist and wheel (the artifacts CI uploads).
+	@uv build --out-dir $(DIST_DIR)
+	@ls -lh $(DIST_DIR)
 
 release-pr: ## Open or refresh the draft release PR into $(TRUNK) (env: BRANCH).
 	@set -eu; \
