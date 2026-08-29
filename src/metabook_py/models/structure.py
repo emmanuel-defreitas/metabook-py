@@ -21,12 +21,11 @@ from metabook_py.models.book import BlobInfo, BookInfo, UploadedBookInfo
 # ── Deep-detail nodes (opt-in via detail=sentence|clause|word) ─────────────────
 #
 # Like every other node these carry only positions and counts — never text.
-# A word's only attribute is its character length.
+# A word node is purely positional.
 
 
 class WordNode(BaseModel):
     index: int
-    length: int
 
 
 class ClauseNode(BaseModel):

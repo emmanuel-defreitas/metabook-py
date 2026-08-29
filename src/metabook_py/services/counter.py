@@ -82,11 +82,10 @@ def _split_paragraphs(text: str) -> list[str]:
 
 # Clause boundaries: comma, semicolon, colon, and dashes.
 _CLAUSE_BOUNDARY = re.compile(r"[,;:]|—|–|--")
-_WORD_RE = re.compile(r"\b[a-zA-Z0-9]+\b")
 
 
 def _word_nodes(text: str) -> list[WordNode]:
-    return [WordNode(index=i + 1, length=len(tok)) for i, tok in enumerate(_WORD_RE.findall(text))]
+    return [WordNode(index=i + 1) for i in range(_count_words(text))]
 
 
 def _clause_nodes(sentence: str, *, detail: str) -> list[ClauseNode]:
