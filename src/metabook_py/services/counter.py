@@ -310,6 +310,32 @@ def _build_essay_collection(
     return _chapters_summary(essays)
 
 
+# Verse marker with its chapter:verse numbers captured, e.g. "3:14 ". Some
+# printings run a verse on from the previous line, so a marker may also appear
+# mid-line after whitespace.
+_VERSE_MARK = re.compile(r"(?:^|(?<=\s))(\d{1,3}):(\d{1,3})\s", re.MULTILINE)
+
+
+def _verse_number_chapters(content: str) -> list[tuple[int, list[tuple[int, str]]]]:
+    """
+    Group a book's verses into chapters using the chapter component of the
+    "C:V" verse markers. Returns [(chapter_number, [(verse_number, text), …])]
+    for texts (like the Gutenberg KJV) that have no explicit CHAPTER headings.
+    """
+    marks = list(_VERSE_MARK.finditer(content))
+    chapters: list[tuple[int, list[tuple[int, str]]]] = []
+    for i, mark in enumerate(marks):
+        chapter_no, verse_no = int(mark.group(1)), int(mark.group(2))
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(content)
+        verse_text = content[mark.end() : end].strip()
+        if not verse_text:
+            continue
+        if not chapters or chapters[-1][0] != chapter_no:
+            chapters.append((chapter_no, []))
+        chapters[-1][1].append((verse_no, verse_text))
+    return chapters
+
+
 def _build_scripture(
     text: str, *, include_paragraphs: bool, detail: str = "paragraph"
 ) -> tuple[list[PartNode], StructureSummary]:
@@ -318,6 +344,8 @@ def _build_scripture(
     Hierarchy: Book → Chapter → Verse-paragraph.
     """
     book_splits = _split_on(text, SCRIPTURE_BOOK_RE)
+    # Drop headings with no verses under them (testament banners, front matter).
+    book_splits = [s for s in book_splits if VERSE_RE.search(s[1])]
     if not book_splits:
         return _build_sectioned_book(text, include_paragraphs=include_paragraphs, detail=detail)
 
@@ -325,6 +353,16 @@ def _build_scripture(
     for bi, (book_label, book_content) in enumerate(book_splits):
         ch_splits = _split_on(book_content, CHAPTER_WORD_RE)
         if not ch_splits:
+            # No explicit CHAPTER headings — derive chapters from the "C:V"
+            # verse numbers (the Gutenberg KJV format).
+            numbered = _verse_number_chapters(book_content)
+            if numbered:
+                chapters = [
+                    _verse_chapter_node(chapter_no, verses, include_paragraphs, detail)
+                    for chapter_no, verses in numbered
+                ]
+                books.append(_book_node(bi + 1, book_label, chapters))
+                continue
             ch_splits = [("", book_content)]
 
         chapters: list[ChapterNode] = []
@@ -352,21 +390,44 @@ def _build_scripture(
                 )
             )
 
-        total_bp = sum(c.paragraph_count for c in chapters)
-        total_bw = sum(c.total_words for c in chapters)
-        books.append(
-            PartNode(
-                level="book",
-                index=bi + 1,
-                label=book_label or f"Book {bi + 1}",
-                child_count=len(chapters),
-                total_paragraphs=total_bp,
-                total_words=total_bw,
-                children=chapters,
-            )
-        )
+        books.append(_book_node(bi + 1, book_label, chapters))
 
     return _parts_summary(books)
+
+
+def _verse_chapter_node(
+    chapter_no: int,
+    verses: list[tuple[int, str]],
+    include_paragraphs: bool,
+    detail: str,
+) -> ChapterNode:
+    verse_nodes = [_para_node(v_text, v_no, detail=detail) for v_no, v_text in verses]
+    total_s = sum(v.sentence_count for v in verse_nodes)
+    total_w = sum(v.word_count for v in verse_nodes)
+    vc = len(verse_nodes)
+    return ChapterNode(
+        level="chapter",
+        index=chapter_no,
+        label=f"Chapter {chapter_no}",
+        paragraph_count=vc,
+        avg_sentences_per_paragraph=round(total_s / max(vc, 1), 2),
+        avg_words_per_sentence=round(total_w / max(total_s, 1), 2),
+        total_words=total_w,
+        total_sentences=total_s,
+        paragraphs=verse_nodes if include_paragraphs else None,
+    )
+
+
+def _book_node(index: int, label: str, chapters: list[ChapterNode]) -> PartNode:
+    return PartNode(
+        level="book",
+        index=index,
+        label=label or f"Book {index}",
+        child_count=len(chapters),
+        total_paragraphs=sum(c.paragraph_count for c in chapters),
+        total_words=sum(c.total_words for c in chapters),
+        children=chapters,
+    )
 
 
 # ── Summary helpers ────────────────────────────────────────────────────────────
