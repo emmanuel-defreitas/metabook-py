@@ -5,13 +5,34 @@
 //! ready-to-display [`Analysis`] or a user-facing error message.
 
 use std::collections::HashMap;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
+
+/// ureq's `into_string()` refuses bodies over 10 MB, which deep `detail=`
+/// levels on large books exceed easily; read manually with a far larger cap.
+const MAX_BODY_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Read the full response body, replacing `into_string()`'s 10 MB cap.
+fn read_body(resp: ureq::Response) -> Result<String, String> {
+    let mut text = String::new();
+    resp.into_reader()
+        .take(MAX_BODY_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|err| format!("Couldn't read the API response: {err}"))?;
+    if text.len() as u64 > MAX_BODY_BYTES {
+        return Err(
+            "The response is too large to display (over 200 MB). \
+             Try a shallower detail level, like Sentence or Paragraph."
+                .into(),
+        );
+    }
+    Ok(text)
+}
 
 /// A successful structural analysis, ready for presentation.
 pub struct Analysis {
@@ -131,9 +152,7 @@ fn multipart_body(filename: &str, bytes: &[u8]) -> (Vec<u8>, String) {
 }
 
 fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
-    let text = resp
-        .into_string()
-        .map_err(|err| format!("Couldn't read the API response: {err}"))?;
+    let text = read_body(resp)?;
     let value: Value = serde_json::from_str(&text)
         .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
 
@@ -363,12 +382,9 @@ fn node_label(node: &Value, fallback_kind: &str) -> String {
 }
 
 fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
-    let value: Value = resp
-        .into_string()
-        .map_err(|err| format!("Couldn't read the API response: {err}"))
-        .and_then(|text| {
-            serde_json::from_str(&text).map_err(|err| format!("Invalid JSON from the API: {err}"))
-        })?;
+    let value: Value = read_body(resp).and_then(|text| {
+        serde_json::from_str(&text).map_err(|err| format!("Invalid JSON from the API: {err}"))
+    })?;
 
     let matches = value["matches"]
         .as_array()
@@ -402,8 +418,7 @@ fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
 }
 
 fn status_message(code: u16, resp: ureq::Response) -> String {
-    let detail = resp
-        .into_string()
+    let detail = read_body(resp)
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .map(|value| value["detail"].clone())
