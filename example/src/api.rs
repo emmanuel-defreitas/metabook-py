@@ -48,9 +48,10 @@ pub enum SearchOutcome {
 }
 
 /// GET /api/books/structure — search Project Gutenberg by title/author or ISBN.
-pub fn search(base: &str, query: &str, isbn: &str) -> Result<SearchOutcome, String> {
+pub fn search(base: &str, query: &str, isbn: &str, detail: &str) -> Result<SearchOutcome, String> {
     let mut request = ureq::get(&format!("{base}/api/books/structure"))
         .query("include_paragraphs", "true")
+        .query("detail", detail)
         .timeout(TIMEOUT);
     if !query.is_empty() {
         request = request.query("title", query);
@@ -69,9 +70,10 @@ pub fn search(base: &str, query: &str, isbn: &str) -> Result<SearchOutcome, Stri
 }
 
 /// GET /api/books/structure?gutenberg_id=… — analyse one selected match.
-pub fn fetch_by_id(base: &str, gutenberg_id: u64) -> Result<Analysis, String> {
+pub fn fetch_by_id(base: &str, gutenberg_id: u64, detail: &str) -> Result<Analysis, String> {
     let request = ureq::get(&format!("{base}/api/books/structure"))
         .query("include_paragraphs", "true")
+        .query("detail", detail)
         .query("gutenberg_id", &gutenberg_id.to_string())
         .timeout(TIMEOUT);
 
@@ -83,7 +85,7 @@ pub fn fetch_by_id(base: &str, gutenberg_id: u64) -> Result<Analysis, String> {
 }
 
 /// POST /api/books/upload — upload an EPUB file for analysis.
-pub fn upload(base: &str, path: &Path) -> Result<Analysis, String> {
+pub fn upload(base: &str, path: &Path, detail: &str) -> Result<Analysis, String> {
     let bytes = std::fs::read(path)
         .map_err(|err| format!("Couldn't read “{}”: {err}", path.display()))?;
     let filename = path
@@ -95,6 +97,7 @@ pub fn upload(base: &str, path: &Path) -> Result<Analysis, String> {
 
     let result = ureq::post(&format!("{base}/api/books/upload"))
         .query("include_paragraphs", "true")
+        .query("detail", detail)
         .set("Content-Type", &content_type)
         .timeout(TIMEOUT)
         .send_bytes(&body);
@@ -190,7 +193,10 @@ fn write_value(
                 let child_ctx = match (ctx, key.as_str()) {
                     (NodeCtx::Outside, "structure") if indent == 0 => NodeCtx::Structure,
                     (NodeCtx::Structure, "nodes") => NodeCtx::Structure,
-                    (NodeCtx::Node(_), "children" | "paragraphs") => ctx.clone(),
+                    (
+                        NodeCtx::Node(_),
+                        "children" | "paragraphs" | "sentences" | "clauses" | "words",
+                    ) => ctx.clone(),
                     _ => NodeCtx::Outside,
                 };
                 write_value(val, indent + 2, &child_ctx, out, line, ranges);
@@ -270,21 +276,14 @@ fn top_node(node: &Value, ix: usize, leaf_name: &str) -> TreeNode {
     } else if node["paragraph_count"].is_number() {
         chapter_node(node, id, leaf_name)
     } else {
-        leaf_node(node, id, leaf_name)
+        paragraph_node(node, id, leaf_name)
     }
 }
 
 fn chapter_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
-    let children = node["paragraphs"]
-        .as_array()
-        .map(|paragraphs| {
-            paragraphs
-                .iter()
-                .enumerate()
-                .map(|(p_ix, p)| leaf_node(p, format!("{id}.{p_ix}"), leaf_name))
-                .collect()
-        })
-        .unwrap_or_default();
+    let children = child_nodes(node, "paragraphs", &id, |p, cid| {
+        paragraph_node(p, cid, leaf_name)
+    });
     TreeNode {
         label: node_label(node, "Chapter"),
         children,
@@ -292,13 +291,64 @@ fn chapter_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     }
 }
 
-fn leaf_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
+/// Map the elements of `node[key]` (if present) through `build`, extending ids
+/// positionally — the same scheme the pretty printer records ranges under.
+fn child_nodes(
+    node: &Value,
+    key: &str,
+    parent_id: &str,
+    build: impl Fn(&Value, String) -> TreeNode,
+) -> Vec<TreeNode> {
+    node[key]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .enumerate()
+                .map(|(ix, item)| build(item, format!("{parent_id}.{ix}")))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn paragraph_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     let index = node["index"].as_u64().unwrap_or(0);
     let sentences = node["sentence_count"].as_u64().unwrap_or(0);
     let words = node["word_count"].as_u64().unwrap_or(0);
     TreeNode {
+        children: child_nodes(node, "sentences", &id, sentence_node),
         id,
         label: format!("{leaf_name} {index} — {sentences} sentences · {words} words"),
+    }
+}
+
+fn sentence_node(node: &Value, id: String) -> TreeNode {
+    let index = node["index"].as_u64().unwrap_or(0);
+    let clauses = node["clause_count"].as_u64().unwrap_or(0);
+    let words = node["word_count"].as_u64().unwrap_or(0);
+    TreeNode {
+        children: child_nodes(node, "clauses", &id, clause_node),
+        id,
+        label: format!("Sentence {index} — {clauses} clauses · {words} words"),
+    }
+}
+
+fn clause_node(node: &Value, id: String) -> TreeNode {
+    let index = node["index"].as_u64().unwrap_or(0);
+    let words = node["word_count"].as_u64().unwrap_or(0);
+    TreeNode {
+        children: child_nodes(node, "words", &id, word_node),
+        id,
+        label: format!("Clause {index} — {words} words"),
+    }
+}
+
+fn word_node(node: &Value, id: String) -> TreeNode {
+    let index = node["index"].as_u64().unwrap_or(0);
+    let length = node["length"].as_u64().unwrap_or(0);
+    TreeNode {
+        id,
+        label: format!("Word {index} · {length} chars"),
         children: Vec::new(),
     }
 }
