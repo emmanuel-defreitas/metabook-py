@@ -9,15 +9,17 @@
 //! overwrite a newer one.
 
 use std::collections::HashMap;
+use std::f32::consts::FRAC_PI_2;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, UniformListScrollHandle, Window, div,
-    px, uniform_list,
+    Animation, AnimationExt as _, AppContext as _, ClipboardItem, Context, ElementId, Entity,
+    InteractiveElement as _, IntoElement, ParentElement, PathPromptOptions, Render,
+    ScrollStrategy, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
+    UniformListScrollHandle, Window, div, px, radians, uniform_list,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -29,7 +31,7 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _, StyledExt as _,
-    h_flex, v_flex,
+    Theme, ThemeMode, TitleBar, h_flex, v_flex,
 };
 
 use crate::api::{self, BookMatch, SearchOutcome, TreeNode};
@@ -315,29 +317,71 @@ impl MetabookApp {
         }
     }
 
+    fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mode = if cx.theme().is_dark() {
+            ThemeMode::Light
+        } else {
+            ThemeMode::Dark
+        };
+        Theme::change(mode, Some(window), cx);
+        cx.notify();
+    }
+
     // ── Regions ────────────────────────────────────────────────────────────────
 
-    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
-        h_flex()
-            .items_center()
-            .justify_between()
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(div().text_lg().font_semibold().child("Metabook"))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Structural schema for any book — no text ever leaves the API"),
-                    ),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(self.api_base.clone()),
-            )
+    /// Custom title bar: app identity on the left, API base and the theme
+    /// toggle on the right. Replaces the native macOS title bar.
+    fn render_title_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme_icon = if cx.theme().is_dark() {
+            IconName::Sun
+        } else {
+            IconName::Moon
+        };
+        TitleBar::new().child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .pr_2()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .min_w_0()
+                        .child(div().text_sm().font_semibold().child("Metabook"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .truncate()
+                                .child("Structural schema for any book"),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .flex_none()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.api_base.clone()),
+                        )
+                        .child(
+                            Button::new("toggle-theme")
+                                .ghost()
+                                .small()
+                                .icon(theme_icon)
+                                .tooltip("Switch between light and dark mode")
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.toggle_theme(window, cx)
+                                    }),
+                                ),
+                        ),
+                ),
+        )
     }
 
     fn render_search_form(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -647,22 +691,44 @@ impl MetabookApp {
             .border_r_1()
             .border_color(cx.theme().border)
             .child(tree(&tree_state, |ix, entry, selected, _, _| {
-                let icon = if !entry.is_folder() {
-                    IconName::File
-                } else if entry.is_expanded() {
-                    IconName::FolderOpen
+                let id = entry.item().id.clone();
+                let expanded = entry.is_expanded();
+
+                // Folders get a chevron that rotates 0° → 90° on expand (and
+                // back); keying the animation on the expanded state replays
+                // it on every toggle.
+                let icon = if entry.is_folder() {
+                    Icon::new(IconName::ChevronRight)
+                        .small()
+                        .with_animation(
+                            ElementId::Name(format!("chev-{id}-{expanded}").into()),
+                            Animation::new(Duration::from_millis(150)),
+                            move |chevron, delta| {
+                                let progress = if expanded { delta } else { 1.0 - delta };
+                                chevron.rotate(radians(progress * FRAC_PI_2))
+                            },
+                        )
+                        .into_any_element()
                 } else {
-                    IconName::Folder
+                    Icon::new(IconName::File).small().into_any_element()
                 };
+
                 ListItem::new(ix)
                     .selected(selected)
                     .pl(px(16.) * entry.depth() as f32 + px(4.))
                     .child(
+                        // Rows fade in as they appear (newly revealed children
+                        // after an expand, or rows entering the viewport).
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(Icon::new(icon).small())
-                            .child(div().text_sm().truncate().child(entry.item().label.clone())),
+                            .child(icon)
+                            .child(div().text_sm().truncate().child(entry.item().label.clone()))
+                            .with_animation(
+                                ElementId::Name(format!("row-{id}").into()),
+                                Animation::new(Duration::from_millis(150)),
+                                |row, delta| row.opacity(delta),
+                            ),
                     )
             }))
     }
@@ -684,27 +750,33 @@ impl Render for MetabookApp {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .gap_3()
-            .p_4()
-            .child(self.render_header(cx))
+            .child(self.render_title_bar(cx))
             .child(
-                TabBar::new("source-tabs")
-                    .selected_index(self.tab_ix)
-                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        this.tab_ix = *ix;
-                        cx.notify();
-                    }))
-                    .child(Tab::new().label("Search"))
-                    .child(Tab::new().label("Upload EPUB")),
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_3()
+                    .p_4()
+                    .pt_2()
+                    .child(
+                        TabBar::new("source-tabs")
+                            .selected_index(self.tab_ix)
+                            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                                this.tab_ix = *ix;
+                                cx.notify();
+                            }))
+                            .child(Tab::new().label("Search"))
+                            .child(Tab::new().label("Upload EPUB")),
+                    )
+                    .map(|this| {
+                        if self.tab_ix == TAB_UPLOAD {
+                            this.child(self.render_upload_form(cx))
+                        } else {
+                            this.child(self.render_search_form(cx))
+                        }
+                    })
+                    .child(self.render_content(cx)),
             )
-            .map(|this| {
-                if self.tab_ix == TAB_UPLOAD {
-                    this.child(self.render_upload_form(cx))
-                } else {
-                    this.child(self.render_search_form(cx))
-                }
-            })
-            .child(self.render_content(cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }
