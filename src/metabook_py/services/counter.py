@@ -357,11 +357,11 @@ def _build_scripture(
             # verse numbers (the Gutenberg KJV format).
             numbered = _verse_number_chapters(book_content)
             if numbered:
-                chapters = [
+                verse_chapters = [
                     _verse_chapter_node(chapter_no, verses, include_paragraphs, detail)
                     for chapter_no, verses in numbered
                 ]
-                books.append(_book_node(bi + 1, book_label, chapters))
+                books.append(_book_node(bi + 1, book_label, verse_chapters))
                 continue
             ch_splits = [("", book_content)]
 
