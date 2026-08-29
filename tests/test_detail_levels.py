@@ -51,9 +51,9 @@ def test_word_detail_nests_words(standard_book_raw):
     assert first_clause.words is not None
     assert len(first_clause.words) == first_clause.word_count
     word = first_clause.words[0]
-    # Only position and length — a word node must never contain text
-    assert set(word.model_dump().keys()) == {"index", "length"}
-    assert word.length == len("It")
+    # Purely positional — a word node must never contain text
+    assert set(word.model_dump().keys()) == {"index"}
+    assert word.index == 1
 
 
 def test_clause_counts_are_consistent(standard_book_raw):

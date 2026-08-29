@@ -345,10 +345,9 @@ fn clause_node(node: &Value, id: String) -> TreeNode {
 
 fn word_node(node: &Value, id: String) -> TreeNode {
     let index = node["index"].as_u64().unwrap_or(0);
-    let length = node["length"].as_u64().unwrap_or(0);
     TreeNode {
         id,
-        label: format!("Word {index} · {length} chars"),
+        label: format!("Word {index}"),
         children: Vec::new(),
     }
 }
