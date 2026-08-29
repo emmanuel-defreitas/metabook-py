@@ -6,6 +6,8 @@ class Settings(BaseSettings):
         # later files win, so .env.local (written by `vercel env pull`) overrides .env
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
+        # .env.local also carries vars we don't model (e.g. VERCEL_OIDC_TOKEN)
+        extra="ignore",
     )
 
     gutendex_base_url: str = "https://gutendex.com"
