@@ -16,7 +16,30 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from metabook_py.models.book import BookInfo
+from metabook_py.models.book import BlobInfo, BookInfo, UploadedBookInfo
+
+# ── Deep-detail nodes (opt-in via detail=sentence|clause|word) ─────────────────
+#
+# Like every other node these carry only positions and counts — never text.
+# A word node is purely positional.
+
+
+class WordNode(BaseModel):
+    index: int
+
+
+class ClauseNode(BaseModel):
+    index: int
+    word_count: int
+    words: list[WordNode] | None = None  # None unless detail="word"
+
+
+class SentenceNode(BaseModel):
+    index: int
+    clause_count: int
+    word_count: int
+    clauses: list[ClauseNode] | None = None  # None unless detail>="clause"
+
 
 # ── Leaf node ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +49,7 @@ class ParagraphNode(BaseModel):
     sentence_count: int
     word_count: int
     avg_words_per_sentence: float
+    sentences: list[SentenceNode] | None = None  # None unless detail>="sentence"
 
 
 # ── Mid-level node (chapter / essay / story) ───────────────────────────────────
@@ -92,3 +116,19 @@ class BookStructureResponse(BaseModel):
     book: BookInfo
     structure: StructureDetail
     meta: MetaInfo
+
+
+# ── Upload response ────────────────────────────────────────────────────────────
+
+
+class UploadMetaInfo(BaseModel):
+    uploaded_at: datetime
+    spine_document_count: int
+    processing_time_ms: int
+
+
+class BookUploadResponse(BaseModel):
+    book: UploadedBookInfo
+    blob: BlobInfo
+    structure: StructureDetail
+    meta: UploadMetaInfo

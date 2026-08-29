@@ -23,9 +23,12 @@ from collections.abc import Callable
 
 from metabook_py.models.structure import (
     ChapterNode,
+    ClauseNode,
     ParagraphNode,
     PartNode,
+    SentenceNode,
     StructureSummary,
+    WordNode,
 )
 from metabook_py.services.detector import (
     CAPS_TITLE_RE,
@@ -37,6 +40,9 @@ from metabook_py.services.detector import (
     DetectedSchema,
     SchemaType,
 )
+
+# Detail levels for the depth of leaf nesting, shallow → deep.
+DETAIL_LEVELS = ("paragraph", "sentence", "clause", "word")
 
 # ── Sentence-splitting ─────────────────────────────────────────────────────────
 
@@ -74,8 +80,42 @@ def _split_paragraphs(text: str) -> list[str]:
 
 # ── Node builders ──────────────────────────────────────────────────────────────
 
+# Clause boundaries: comma, semicolon, colon, and dashes.
+_CLAUSE_BOUNDARY = re.compile(r"[,;:]|—|–|--")
 
-def _para_node(text: str, index: int) -> ParagraphNode:
+
+def _word_nodes(text: str) -> list[WordNode]:
+    return [WordNode(index=i + 1) for i in range(_count_words(text))]
+
+
+def _clause_nodes(sentence: str, *, detail: str) -> list[ClauseNode]:
+    clauses = [c.strip() for c in _CLAUSE_BOUNDARY.split(sentence) if c.strip()]
+    return [
+        ClauseNode(
+            index=i + 1,
+            word_count=_count_words(c),
+            words=_word_nodes(c) if detail == "word" else None,
+        )
+        for i, c in enumerate(clauses)
+    ]
+
+
+def _sentence_nodes(sentences: list[str], *, detail: str) -> list[SentenceNode]:
+    nodes = []
+    for i, s in enumerate(sentences):
+        clauses = _clause_nodes(s, detail=detail)
+        nodes.append(
+            SentenceNode(
+                index=i + 1,
+                clause_count=max(1, len(clauses)),
+                word_count=_count_words(s),
+                clauses=clauses if detail in ("clause", "word") else None,
+            )
+        )
+    return nodes
+
+
+def _para_node(text: str, index: int, *, detail: str = "paragraph") -> ParagraphNode:
     sentences = _split_sentences(text)
     sc = max(1, len(sentences))
     wc = _count_words(text)
@@ -84,6 +124,7 @@ def _para_node(text: str, index: int) -> ParagraphNode:
         sentence_count=sc,
         word_count=wc,
         avg_words_per_sentence=round(wc / sc, 2),
+        sentences=_sentence_nodes(sentences, detail=detail) if detail != "paragraph" else None,
     )
 
 
@@ -94,9 +135,10 @@ def _chapter_node(
     level: str,
     *,
     include_paragraphs: bool,
+    detail: str = "paragraph",
 ) -> ChapterNode:
     paras = _split_paragraphs(text)
-    para_nodes = [_para_node(p, i + 1) for i, p in enumerate(paras)]
+    para_nodes = [_para_node(p, i + 1, detail=detail) for i, p in enumerate(paras)]
 
     if not para_nodes:
         return ChapterNode(
@@ -155,9 +197,9 @@ def _split_on(text: str, pattern: re.Pattern) -> list[tuple[str, str]]:
 
 
 def _build_flat(
-    text: str, *, include_paragraphs: bool
+    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
 ) -> tuple[list[ParagraphNode], StructureSummary]:
-    nodes = [_para_node(p, i + 1) for i, p in enumerate(_split_paragraphs(text))]
+    nodes = [_para_node(p, i + 1, detail=detail) for i, p in enumerate(_split_paragraphs(text))]
     total_s = sum(p.sentence_count for p in nodes)
     total_w = sum(p.word_count for p in nodes)
     pc = len(nodes)
@@ -175,12 +217,12 @@ def _build_flat(
 
 
 def _build_standard_book(
-    text: str, schema: DetectedSchema, *, include_paragraphs: bool
+    text: str, schema: DetectedSchema, *, include_paragraphs: bool, detail: str = "paragraph"
 ) -> tuple[list[ChapterNode], StructureSummary]:
     # Prefer explicit "Chapter N" wording; fall back to standalone numerals
     splits = _split_on(text, CHAPTER_WORD_RE) or _split_on(text, CHAPTER_NUM_RE)
     if not splits:
-        nodes, summary = _build_flat(text, include_paragraphs=include_paragraphs)
+        nodes, summary = _build_flat(text, include_paragraphs=include_paragraphs, detail=detail)
         return nodes, summary  # type: ignore[return-value]
 
     chapters = [
@@ -190,6 +232,7 @@ def _build_standard_book(
             label or f"Chapter {i + 1}",
             "chapter",
             include_paragraphs=include_paragraphs,
+            detail=detail,
         )
         for i, (label, content) in enumerate(splits)
     ]
@@ -197,7 +240,7 @@ def _build_standard_book(
 
 
 def _build_sectioned_book(
-    text: str, *, include_paragraphs: bool
+    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
 ) -> tuple[list[PartNode], StructureSummary]:
     part_splits = _split_on(text, PART_RE)
     if not part_splits:
@@ -205,6 +248,7 @@ def _build_sectioned_book(
             text,
             DetectedSchema(SchemaType.SECTIONED_BOOK, "low", 0),
             include_paragraphs=include_paragraphs,
+            detail=detail,
         )
         return chapters, summary  # type: ignore[return-value]
 
@@ -223,6 +267,7 @@ def _build_sectioned_book(
                 label or f"Chapter {ci + 1}",
                 "chapter",
                 include_paragraphs=include_paragraphs,
+                detail=detail,
             )
             for ci, (label, content) in enumerate(ch_splits)
         ]
@@ -244,11 +289,11 @@ def _build_sectioned_book(
 
 
 def _build_essay_collection(
-    text: str, *, include_paragraphs: bool
+    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
 ) -> tuple[list[ChapterNode], StructureSummary]:
     splits = _split_on(text, CAPS_TITLE_RE)
     if not splits:
-        nodes, summary = _build_flat(text, include_paragraphs=include_paragraphs)
+        nodes, summary = _build_flat(text, include_paragraphs=include_paragraphs, detail=detail)
         return nodes, summary  # type: ignore[return-value]
 
     essays = [
@@ -258,6 +303,7 @@ def _build_essay_collection(
             label or f"Essay {i + 1}",
             "essay",
             include_paragraphs=include_paragraphs,
+            detail=detail,
         )
         for i, (label, content) in enumerate(splits)
     ]
@@ -265,7 +311,7 @@ def _build_essay_collection(
 
 
 def _build_scripture(
-    text: str, *, include_paragraphs: bool
+    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
 ) -> tuple[list[PartNode], StructureSummary]:
     """
     For scripture each 'paragraph' is a verse (identified by "N:N " patterns).
@@ -273,7 +319,7 @@ def _build_scripture(
     """
     book_splits = _split_on(text, SCRIPTURE_BOOK_RE)
     if not book_splits:
-        return _build_sectioned_book(text, include_paragraphs=include_paragraphs)
+        return _build_sectioned_book(text, include_paragraphs=include_paragraphs, detail=detail)
 
     books: list[PartNode] = []
     for bi, (book_label, book_content) in enumerate(book_splits):
@@ -288,7 +334,7 @@ def _build_scripture(
                 v.strip() for v in VERSE_RE.split(ch_content) if len(v.strip()) >= 3
             ] or _split_paragraphs(ch_content)
 
-            verse_nodes = [_para_node(v, vi + 1) for vi, v in enumerate(verse_texts)]
+            verse_nodes = [_para_node(v, vi + 1, detail=detail) for vi, v in enumerate(verse_texts)]
             total_s = sum(v.sentence_count for v in verse_nodes)
             total_w = sum(v.word_count for v in verse_nodes)
             vc = len(verse_nodes)
@@ -374,25 +420,32 @@ def build_structure_tree(
     schema: DetectedSchema,
     *,
     include_paragraphs: bool = True,
+    detail: str = "paragraph",
 ) -> tuple[list, StructureSummary]:
     """
     Build and return (nodes, summary) for *text* according to *schema*.
     Nodes are Pydantic model instances — no raw text is included anywhere.
+
+    *detail* controls leaf nesting depth (see DETAIL_LEVELS): paragraphs may
+    contain sentences, sentences clauses, and clauses words. Deeper levels
+    still carry only positions and counts (a word node is index + length).
     """
     dispatch: dict[SchemaType, Callable[[], tuple[list, StructureSummary]]] = {
         SchemaType.CANONICAL_SCRIPTURE: lambda: _build_scripture(
-            text, include_paragraphs=include_paragraphs
+            text, include_paragraphs=include_paragraphs, detail=detail
         ),
         SchemaType.SECTIONED_BOOK: lambda: _build_sectioned_book(
-            text, include_paragraphs=include_paragraphs
+            text, include_paragraphs=include_paragraphs, detail=detail
         ),
         SchemaType.STANDARD_BOOK: lambda: _build_standard_book(
-            text, schema, include_paragraphs=include_paragraphs
+            text, schema, include_paragraphs=include_paragraphs, detail=detail
         ),
         SchemaType.ESSAY_COLLECTION: lambda: _build_essay_collection(
-            text, include_paragraphs=include_paragraphs
+            text, include_paragraphs=include_paragraphs, detail=detail
         ),
-        SchemaType.FLAT: lambda: _build_flat(text, include_paragraphs=include_paragraphs),
+        SchemaType.FLAT: lambda: _build_flat(
+            text, include_paragraphs=include_paragraphs, detail=detail
+        ),
     }
     builder = dispatch.get(schema.name, dispatch[SchemaType.FLAT])
     return builder()
