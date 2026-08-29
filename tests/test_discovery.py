@@ -7,6 +7,7 @@ import respx
 from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BookNotFoundError,
+    GutendexUnavailableError,
     UnsupportedFormatError,
 )
 from metabook_py.services.discovery import GutendexClient
@@ -166,3 +167,33 @@ class TestGutendexClient:
 
         request = route.calls.last.request
         assert b"fr" in request.url.query
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_timeout_raises_unavailable(self):
+        respx.get(gutendex_url()).mock(side_effect=httpx.ReadTimeout("read timed out"))
+
+        client = GutendexClient()
+        with pytest.raises(GutendexUnavailableError) as exc:
+            await client.search(gutenberg_id=1342)
+        assert exc.value.timed_out is True
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_connect_error_raises_unavailable(self):
+        respx.get(gutendex_url()).mock(side_effect=httpx.ConnectError("connection refused"))
+
+        client = GutendexClient()
+        with pytest.raises(GutendexUnavailableError) as exc:
+            await client.search(gutenberg_id=1342)
+        assert exc.value.timed_out is False
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_server_error_raises_unavailable(self):
+        respx.get(gutendex_url()).mock(return_value=httpx.Response(500, text="oops"))
+
+        client = GutendexClient()
+        with pytest.raises(GutendexUnavailableError) as exc:
+            await client.search(gutenberg_id=1342)
+        assert exc.value.timed_out is False

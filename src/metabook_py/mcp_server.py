@@ -31,6 +31,7 @@ from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BlobUploadError,
     BookNotFoundError,
+    GutendexUnavailableError,
     InvalidEpubError,
     TextUnavailableError,
 )
@@ -89,6 +90,16 @@ async def search_book_structure(
         return {
             "error": "book_not_found",
             "query": {"title": title, "isbn": isbn, "gutenberg_id": gutenberg_id},
+        }
+    except GutendexUnavailableError as exc:
+        return {
+            "error": "gutendex_unreachable",
+            "detail": exc.reason,
+            "hint": (
+                "The Gutendex API timed out. Try again shortly."
+                if exc.timed_out
+                else "The Gutendex API could not be reached. Try again shortly."
+            ),
         }
     except AmbiguousBookError as exc:
         return {

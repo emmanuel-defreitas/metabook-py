@@ -19,6 +19,7 @@ from metabook_py.core.config import settings
 from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BookNotFoundError,
+    GutendexUnavailableError,
     UnsupportedFormatError,
 )
 from metabook_py.models.book import AuthorInfo, BookInfo, BookMatch
@@ -96,9 +97,11 @@ class GutendexClient:
 
         Raises
         ------
-        BookNotFoundError       — zero results
-        AmbiguousBookError      — multiple results when no gutenberg_id given
-        UnsupportedFormatError  — book found but no text format available
+        BookNotFoundError         — zero results
+        AmbiguousBookError        — multiple results when no gutenberg_id given
+        UnsupportedFormatError    — book found but no text format available
+        GutendexUnavailableError  — Gutendex timed out, refused the connection,
+                                    or returned a non-2xx response
         """
         params: dict[str, str] = {"languages": language}
 
@@ -111,12 +114,19 @@ class GutendexClient:
             params["search"] = title
 
         async with self._semaphore:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(
-                    f"{settings.gutendex_base_url}/books/",
-                    params=params,
-                )
-                resp.raise_for_status()
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(
+                        f"{settings.gutendex_base_url}/books/",
+                        params=params,
+                    )
+                    resp.raise_for_status()
+            except httpx.TimeoutException as exc:
+                raise GutendexUnavailableError(
+                    str(exc) or "request timed out", timed_out=True
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise GutendexUnavailableError(str(exc)) from exc
 
         payload = resp.json()
         results: list[dict] = payload.get("results", [])

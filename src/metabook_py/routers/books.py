@@ -18,6 +18,7 @@ from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BlobUploadError,
     BookNotFoundError,
+    GutendexUnavailableError,
     InvalidEpubError,
     TextUnavailableError,
 )
@@ -75,6 +76,8 @@ async def list_schemas() -> list[SchemaInfo]:
         300: {"description": "Multiple books found — disambiguate with gutenberg_id"},
         404: {"description": "No book matched the query"},
         422: {"description": "Book found but its text could not be retrieved"},
+        502: {"description": "Gutendex API is unreachable"},
+        504: {"description": "Gutendex API timed out"},
     },
     summary="Analyse book structure",
 )
@@ -123,6 +126,11 @@ async def get_book_structure(
             status_code=300,
             content=DisambiguationResult(matches=exc.matches).model_dump(),
         )
+    except GutendexUnavailableError as exc:
+        raise HTTPException(
+            status_code=504 if exc.timed_out else 502,
+            detail={"error": "gutendex_unreachable", "message": exc.reason},
+        ) from exc
 
     # ── 2. Fetch text ──────────────────────────────────────────────────────────
     try:
