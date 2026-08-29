@@ -8,13 +8,16 @@
 //! states. Async requests carry a request index so a stale response can never
 //! overwrite a newer one.
 
+use std::collections::HashMap;
+use std::ops::Range;
 use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Window, div, px,
+    ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, UniformListScrollHandle, Window, div,
+    px, uniform_list,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -22,7 +25,6 @@ use gpui_component::list::ListItem;
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::text::TextView;
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _, StyledExt as _,
@@ -43,7 +45,13 @@ enum Phase {
     Done {
         title: SharedString,
         schema_json: SharedString,
+        json_lines: Vec<SharedString>,
+        /// Node id → (first, last) 0-based JSON line of that node.
+        ranges: HashMap<String, (usize, usize)>,
+        /// Lines currently highlighted from the tree selection.
+        highlight: Option<(usize, usize)>,
         tree_state: Entity<TreeState>,
+        json_scroll: UniformListScrollHandle,
     },
     Failed { message: SharedString },
 }
@@ -192,10 +200,22 @@ impl MetabookApp {
             Ok(SearchOutcome::Analysis(analysis)) => {
                 let items: Vec<TreeItem> =
                     analysis.tree.iter().map(|n| to_tree_item(n, true)).collect();
+                let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
+                // No selection event exists; observe the state and react to
+                // whatever entry is selected after each change.
+                cx.observe(&tree_state, Self::on_tree_changed).detach();
                 Phase::Done {
                     title: analysis.title.into(),
+                    json_lines: analysis
+                        .schema_json
+                        .lines()
+                        .map(|l| SharedString::from(l.to_string()))
+                        .collect(),
                     schema_json: analysis.schema_json.into(),
-                    tree_state: cx.new(|cx| TreeState::new(cx).items(items)),
+                    ranges: analysis.ranges,
+                    highlight: None,
+                    tree_state,
+                    json_scroll: UniformListScrollHandle::new(),
                 }
             }
             Ok(SearchOutcome::Matches(matches)) => Phase::Matches { matches },
@@ -233,6 +253,25 @@ impl MetabookApp {
             };
         }
         cx.notify();
+    }
+
+    /// After any tree change, sync the JSON pane to the selected node.
+    fn on_tree_changed(&mut self, state: Entity<TreeState>, cx: &mut Context<Self>) {
+        let selected_id = state
+            .read(cx)
+            .selected_entry()
+            .map(|entry| entry.item().id.to_string());
+        let Phase::Done { ranges, highlight, json_scroll, .. } = &mut self.phase else {
+            return;
+        };
+        let range = selected_id.and_then(|id| ranges.get(&id).copied());
+        if *highlight != range {
+            *highlight = range;
+            if let Some((start, _)) = range {
+                json_scroll.scroll_to_item(start, ScrollStrategy::Top);
+            }
+            cx.notify();
+        }
     }
 
     fn copy_schema(&mut self, cx: &mut Context<Self>) {
@@ -330,8 +369,14 @@ impl MetabookApp {
             Phase::Processing { message } => self.render_processing(message.clone(), cx).into_any_element(),
             Phase::Matches { matches } => self.render_matches(matches.clone(), cx).into_any_element(),
             Phase::Failed { message } => self.render_failed(message.clone(), cx).into_any_element(),
-            Phase::Done { title, schema_json, tree_state } => self
-                .render_result(title.clone(), schema_json.clone(), tree_state.clone(), cx)
+            Phase::Done { title, json_lines, tree_state, json_scroll, .. } => self
+                .render_result(
+                    title.clone(),
+                    json_lines.len(),
+                    tree_state.clone(),
+                    json_scroll.clone(),
+                    cx,
+                )
                 .into_any_element(),
         };
         div().flex_1().min_h_0().child(content)
@@ -474,11 +519,11 @@ impl MetabookApp {
     fn render_result(
         &self,
         title: SharedString,
-        schema_json: SharedString,
+        line_count: usize,
         tree_state: Entity<TreeState>,
+        json_scroll: UniformListScrollHandle,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let markdown: SharedString = format!("```json\n{schema_json}\n```").into();
         v_flex()
             .size_full()
             .gap_2()
@@ -507,15 +552,51 @@ impl MetabookApp {
                         )
                         .child(
                             resizable_panel().child(
-                                div().size_full().pl_3().child(
-                                    TextView::markdown("schema-json", markdown)
-                                        .selectable(true)
-                                        .scrollable(true),
-                                ),
+                                div()
+                                    .size_full()
+                                    .pl_3()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .text_sm()
+                                    .child(
+                                        uniform_list(
+                                            "schema-json-lines",
+                                            line_count,
+                                            cx.processor(Self::render_json_lines),
+                                        )
+                                        .size_full()
+                                        .track_scroll(&json_scroll),
+                                    ),
                             ),
                         ),
                 ),
             )
+    }
+
+    fn render_json_lines(
+        &mut self,
+        visible: Range<usize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let Phase::Done { json_lines, highlight, .. } = &self.phase else {
+            return Vec::new();
+        };
+        let muted = cx.theme().muted;
+        visible
+            .filter_map(|ix| {
+                let text = json_lines.get(ix)?.clone();
+                let highlighted =
+                    highlight.is_some_and(|(start, end)| ix >= start && ix <= end);
+                Some(
+                    div()
+                        .px_2()
+                        .whitespace_nowrap()
+                        .when(highlighted, |line| line.bg(muted))
+                        .child(text)
+                        .into_any_element(),
+                )
+            })
+            .collect()
     }
 
     fn render_structure_tree(

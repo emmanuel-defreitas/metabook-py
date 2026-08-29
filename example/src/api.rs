@@ -4,6 +4,7 @@
 //! here — no async runtime needed. Every public function returns either a
 //! ready-to-display [`Analysis`] or a user-facing error message.
 
+use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,11 +20,13 @@ pub struct Analysis {
     pub schema_json: String,
     /// The structure nodes as a plain label tree (no book text).
     pub tree: Vec<TreeNode>,
+    /// Node id → (first, last) 0-based line of that node in `schema_json`.
+    pub ranges: HashMap<String, (usize, usize)>,
 }
 
 /// One node of the structural tree: a part/book, chapter, or verse/paragraph.
 pub struct TreeNode {
-    /// Stable path id, e.g. "n0.c2.p5".
+    /// Stable positional id: "n{i}" for top-level, then ".{j}" per child level.
     pub id: String,
     pub label: String,
     pub children: Vec<TreeNode>,
@@ -136,9 +139,92 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
         .unwrap_or("Untitled")
         .to_string();
     let tree = build_tree(&value["structure"]);
-    let schema_json = serde_json::to_string_pretty(&value).unwrap_or(text);
+    let (schema_json, ranges) = pretty_print_with_ranges(&value);
 
-    Ok(Analysis { title, schema_json, tree })
+    Ok(Analysis { title, schema_json, tree, ranges })
+}
+
+// ── Pretty printer with node line ranges ───────────────────────────────────────
+//
+// Serialises the response like `to_string_pretty` (2-space indent) while
+// recording which lines each structure node occupies, keyed by the same
+// positional ids the tree uses ("n0", "n0.2", "n0.2.4", …).
+
+/// Where the writer currently is, for id assignment.
+#[derive(Clone)]
+enum NodeCtx {
+    Outside,
+    /// Inside the top-level "structure" object.
+    Structure,
+    /// Inside a structure node object with this id.
+    Node(String),
+}
+
+fn pretty_print_with_ranges(value: &Value) -> (String, HashMap<String, (usize, usize)>) {
+    let mut out = String::new();
+    let mut line = 0usize;
+    let mut ranges = HashMap::new();
+    write_value(value, 0, &NodeCtx::Outside, &mut out, &mut line, &mut ranges);
+    (out, ranges)
+}
+
+fn push(out: &mut String, line: &mut usize, s: &str) {
+    *line += s.matches('\n').count();
+    out.push_str(s);
+}
+
+fn write_value(
+    value: &Value,
+    indent: usize,
+    ctx: &NodeCtx,
+    out: &mut String,
+    line: &mut usize,
+    ranges: &mut HashMap<String, (usize, usize)>,
+) {
+    let pad = " ".repeat(indent + 2);
+    match value {
+        Value::Object(map) if !map.is_empty() => {
+            push(out, line, "{\n");
+            for (ix, (key, val)) in map.iter().enumerate() {
+                push(out, line, &format!("{pad}{}: ", Value::String(key.clone())));
+                let child_ctx = match (ctx, key.as_str()) {
+                    (NodeCtx::Outside, "structure") if indent == 0 => NodeCtx::Structure,
+                    (NodeCtx::Structure, "nodes") => NodeCtx::Structure,
+                    (NodeCtx::Node(_), "children" | "paragraphs") => ctx.clone(),
+                    _ => NodeCtx::Outside,
+                };
+                write_value(val, indent + 2, &child_ctx, out, line, ranges);
+                let sep = if ix + 1 < map.len() { ",\n" } else { "\n" };
+                push(out, line, sep);
+            }
+            push(out, line, &format!("{}}}", " ".repeat(indent)));
+        }
+        Value::Array(items) if !items.is_empty() => {
+            push(out, line, "[\n");
+            for (ix, item) in items.iter().enumerate() {
+                push(out, line, &pad);
+                let start = *line;
+                let item_ctx = element_ctx(ctx, ix);
+                write_value(item, indent + 2, &item_ctx, out, line, ranges);
+                if let NodeCtx::Node(id) = &item_ctx {
+                    ranges.entry(id.clone()).or_insert((start, *line));
+                }
+                let sep = if ix + 1 < items.len() { ",\n" } else { "\n" };
+                push(out, line, sep);
+            }
+            push(out, line, &format!("{}]", " ".repeat(indent)));
+        }
+        other => push(out, line, &other.to_string()),
+    }
+}
+
+/// The context for element `ix` of an array written under `ctx`.
+fn element_ctx(ctx: &NodeCtx, ix: usize) -> NodeCtx {
+    match ctx {
+        NodeCtx::Structure => NodeCtx::Node(format!("n{ix}")),
+        NodeCtx::Node(parent) => NodeCtx::Node(format!("{parent}.{ix}")),
+        NodeCtx::Outside => NodeCtx::Outside,
+    }
 }
 
 // ── Structure → label tree ─────────────────────────────────────────────────────
@@ -168,6 +254,7 @@ fn build_tree(structure: &Value) -> Vec<TreeNode> {
 }
 
 fn top_node(node: &Value, ix: usize, leaf_name: &str) -> TreeNode {
+    // Ids are positional and must mirror pretty_print_with_ranges exactly.
     let id = format!("n{ix}");
     if let Some(children) = node["children"].as_array() {
         // Part / volume / section / book
@@ -176,25 +263,25 @@ fn top_node(node: &Value, ix: usize, leaf_name: &str) -> TreeNode {
             children: children
                 .iter()
                 .enumerate()
-                .map(|(cx_ix, c)| chapter_node(c, &id, cx_ix, leaf_name))
+                .map(|(cx_ix, c)| chapter_node(c, format!("{id}.{cx_ix}"), leaf_name))
                 .collect(),
             id,
         }
     } else if node["paragraph_count"].is_number() {
-        chapter_node(node, "n", ix, leaf_name)
+        chapter_node(node, id, leaf_name)
     } else {
-        leaf_node(node, &id, leaf_name)
+        leaf_node(node, id, leaf_name)
     }
 }
 
-fn chapter_node(node: &Value, parent_id: &str, ix: usize, leaf_name: &str) -> TreeNode {
-    let id = format!("{parent_id}.c{ix}");
+fn chapter_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     let children = node["paragraphs"]
         .as_array()
         .map(|paragraphs| {
             paragraphs
                 .iter()
-                .map(|p| leaf_node(p, &id, leaf_name))
+                .enumerate()
+                .map(|(p_ix, p)| leaf_node(p, format!("{id}.{p_ix}"), leaf_name))
                 .collect()
         })
         .unwrap_or_default();
@@ -205,12 +292,12 @@ fn chapter_node(node: &Value, parent_id: &str, ix: usize, leaf_name: &str) -> Tr
     }
 }
 
-fn leaf_node(node: &Value, parent_id: &str, leaf_name: &str) -> TreeNode {
+fn leaf_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     let index = node["index"].as_u64().unwrap_or(0);
     let sentences = node["sentence_count"].as_u64().unwrap_or(0);
     let words = node["word_count"].as_u64().unwrap_or(0);
     TreeNode {
-        id: format!("{parent_id}.{leaf_name}{index}"),
+        id,
         label: format!("{leaf_name} {index} — {sentences} sentences · {words} words"),
         children: Vec::new(),
     }
