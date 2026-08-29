@@ -12,8 +12,9 @@ use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, ClipboardItem, Context, Entity, IntoElement, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, Subscription, Window, div,
+    AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Window, div,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -25,7 +26,7 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::api::{self, Analysis};
+use crate::api::{self, BookMatch, SearchOutcome};
 
 const TAB_SEARCH: usize = 0;
 const TAB_UPLOAD: usize = 1;
@@ -34,6 +35,8 @@ const TAB_UPLOAD: usize = 1;
 enum Phase {
     Idle,
     Processing { message: SharedString },
+    /// A search matched several books; the user picks one to analyse.
+    Matches { matches: Vec<BookMatch> },
     Done { title: SharedString, schema_json: SharedString },
     Failed { message: SharedString },
 }
@@ -116,8 +119,20 @@ impl MetabookApp {
 
         let base = self.api_base.to_string();
         self.begin_request(
-            "Searching Gutendex and fetching the book text…",
+            "Searching Gutendex…",
             move || api::search(&base, &query, &isbn),
+            cx,
+        );
+    }
+
+    fn select_match(&mut self, gutenberg_id: u64, cx: &mut Context<Self>) {
+        if self.is_processing() {
+            return;
+        }
+        let base = self.api_base.to_string();
+        self.begin_request(
+            "Fetching and scanning the book text…",
+            move || api::fetch_by_id(&base, gutenberg_id).map(SearchOutcome::Analysis),
             cx,
         );
     }
@@ -133,7 +148,7 @@ impl MetabookApp {
         let base = self.api_base.to_string();
         self.begin_request(
             "Uploading and scanning the EPUB…",
-            move || api::upload(&base, &path),
+            move || api::upload(&base, &path).map(SearchOutcome::Analysis),
             cx,
         );
     }
@@ -141,7 +156,7 @@ impl MetabookApp {
     fn begin_request(
         &mut self,
         message: &'static str,
-        work: impl FnOnce() -> Result<Analysis, String> + Send + 'static,
+        work: impl FnOnce() -> Result<SearchOutcome, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
         self.request_ix += 1;
@@ -157,15 +172,21 @@ impl MetabookApp {
         .detach();
     }
 
-    fn finish_request(&mut self, ix: usize, result: Result<Analysis, String>, cx: &mut Context<Self>) {
+    fn finish_request(
+        &mut self,
+        ix: usize,
+        result: Result<SearchOutcome, String>,
+        cx: &mut Context<Self>,
+    ) {
         if ix != self.request_ix {
             return; // A newer request superseded this one.
         }
         self.phase = match result {
-            Ok(analysis) => Phase::Done {
+            Ok(SearchOutcome::Analysis(analysis)) => Phase::Done {
                 title: analysis.title.into(),
                 schema_json: analysis.schema_json.into(),
             },
+            Ok(SearchOutcome::Matches(matches)) => Phase::Matches { matches },
             Err(message) => Phase::Failed { message: message.into() },
         };
         cx.notify();
@@ -295,6 +316,7 @@ impl MetabookApp {
         let content = match &self.phase {
             Phase::Idle => self.render_idle(cx).into_any_element(),
             Phase::Processing { message } => self.render_processing(message.clone(), cx).into_any_element(),
+            Phase::Matches { matches } => self.render_matches(matches.clone(), cx).into_any_element(),
             Phase::Failed { message } => self.render_failed(message.clone(), cx).into_any_element(),
             Phase::Done { title, schema_json } => self
                 .render_result(title.clone(), schema_json.clone(), cx)
@@ -335,6 +357,80 @@ impl MetabookApp {
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child("Fetching, cleaning, and scanning the document can take a few seconds."),
+            )
+    }
+
+    fn render_matches(&self, matches: Vec<BookMatch>, cx: &Context<Self>) -> impl IntoElement {
+        let count = matches.len();
+        v_flex()
+            .size_full()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("{count} books matched — select one to analyse")),
+            )
+            .child(
+                v_flex()
+                    .id("match-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .gap_1()
+                    .children(matches.into_iter().map(|book| {
+                        let id = book.gutenberg_id;
+                        let subtitle = if book.language.is_empty() {
+                            format!("#{id}")
+                        } else {
+                            format!("#{id} · {}", book.language)
+                        };
+                        h_flex()
+                            .id(("match", id))
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .rounded(cx.theme().radius)
+                            .hover(|style| style.bg(cx.theme().muted))
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .min_w_0()
+                                    .child(div().truncate().child(book.title))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .truncate()
+                                            .child(book.authors),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_3()
+                                    .items_center()
+                                    .flex_none()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(subtitle),
+                                    )
+                                    .child(
+                                        Button::new(("analyse-match", id))
+                                            .small()
+                                            .label("Schema")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.select_match(id, cx)
+                                            })),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| this.select_match(id, cx)))
+                    })),
             )
     }
 

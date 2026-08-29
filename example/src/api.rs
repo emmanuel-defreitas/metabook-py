@@ -19,8 +19,23 @@ pub struct Analysis {
     pub schema_json: String,
 }
 
+/// One candidate from a search that matched several books.
+#[derive(Clone)]
+pub struct BookMatch {
+    pub gutenberg_id: u64,
+    pub title: String,
+    pub authors: String,
+    pub language: String,
+}
+
+/// A search either resolves to one analysed book or to a list to choose from.
+pub enum SearchOutcome {
+    Analysis(Analysis),
+    Matches(Vec<BookMatch>),
+}
+
 /// GET /api/books/structure — search Project Gutenberg by title/author or ISBN.
-pub fn search(base: &str, query: &str, isbn: &str) -> Result<Analysis, String> {
+pub fn search(base: &str, query: &str, isbn: &str) -> Result<SearchOutcome, String> {
     let mut request = ureq::get(&format!("{base}/api/books/structure"))
         .query("include_paragraphs", "false")
         .timeout(TIMEOUT);
@@ -33,7 +48,21 @@ pub fn search(base: &str, query: &str, isbn: &str) -> Result<Analysis, String> {
 
     match request.call() {
         // ureq treats 3xx as success; the API uses 300 for "multiple matches".
-        Ok(resp) if resp.status() == 300 => Err(disambiguation_message(resp)),
+        Ok(resp) if resp.status() == 300 => parse_matches(resp).map(SearchOutcome::Matches),
+        Ok(resp) => parse_analysis(resp).map(SearchOutcome::Analysis),
+        Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
+        Err(err) => Err(unreachable_message(base, &err)),
+    }
+}
+
+/// GET /api/books/structure?gutenberg_id=… — analyse one selected match.
+pub fn fetch_by_id(base: &str, gutenberg_id: u64) -> Result<Analysis, String> {
+    let request = ureq::get(&format!("{base}/api/books/structure"))
+        .query("include_paragraphs", "false")
+        .query("gutenberg_id", &gutenberg_id.to_string())
+        .timeout(TIMEOUT);
+
+    match request.call() {
         Ok(resp) => parse_analysis(resp),
         Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
         Err(err) => Err(unreachable_message(base, &err)),
@@ -101,33 +130,43 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
     Ok(Analysis { title, schema_json })
 }
 
-fn disambiguation_message(resp: ureq::Response) -> String {
-    let Ok(value) = resp
+fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
+    let value: Value = resp
         .into_string()
-        .map_err(|_| ())
-        .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|_| ()))
-    else {
-        return "Multiple books matched. Try a more specific title or an ISBN.".into();
-    };
+        .map_err(|err| format!("Couldn't read the API response: {err}"))
+        .and_then(|text| {
+            serde_json::from_str(&text).map_err(|err| format!("Invalid JSON from the API: {err}"))
+        })?;
 
-    let mut message = String::from("Multiple books matched:\n");
-    if let Some(matches) = value["matches"].as_array() {
-        for entry in matches.iter().take(5) {
-            let title = entry["title"].as_str().unwrap_or("?");
-            let authors = entry["authors"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
+    let matches = value["matches"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    Some(BookMatch {
+                        gutenberg_id: entry["gutenberg_id"].as_u64()?,
+                        title: entry["title"].as_str().unwrap_or("Untitled").to_string(),
+                        authors: entry["authors"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default(),
+                        language: entry["language"].as_str().unwrap_or("").to_string(),
+                    })
                 })
-                .unwrap_or_default();
-            message.push_str(&format!("• {title} — {authors}\n"));
-        }
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if matches.is_empty() {
+        return Err("Multiple books matched but the list couldn't be read. Try an ISBN.".into());
     }
-    message.push_str("Try a more specific title or an ISBN.");
-    message
+    Ok(matches)
 }
 
 fn status_message(code: u16, resp: ureq::Response) -> String {
