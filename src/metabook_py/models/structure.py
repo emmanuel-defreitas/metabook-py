@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from metabook_py.models.book import BookInfo
+from metabook_py.models.book import BlobInfo, BookInfo, UploadedBookInfo
 
 # ── Leaf node ──────────────────────────────────────────────────────────────────
 
@@ -92,3 +92,19 @@ class BookStructureResponse(BaseModel):
     book: BookInfo
     structure: StructureDetail
     meta: MetaInfo
+
+
+# ── Upload response ────────────────────────────────────────────────────────────
+
+
+class UploadMetaInfo(BaseModel):
+    uploaded_at: datetime
+    spine_document_count: int
+    processing_time_ms: int
+
+
+class BookUploadResponse(BaseModel):
+    book: UploadedBookInfo
+    blob: BlobInfo
+    structure: StructureDetail
+    meta: UploadMetaInfo
