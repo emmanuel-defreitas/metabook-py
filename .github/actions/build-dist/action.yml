@@ -1,5 +1,5 @@
 name: 'Build Distribution'
-description: 'Installs uv, builds the wheel, and uploads it as an artifact'
+description: 'Installs uv, builds the sdist and wheel, and uploads them as an artifact'
 runs:
   using: "composite"
   steps:
@@ -8,12 +8,12 @@ runs:
       with:
         enable-cache: true
 
-    - name: Build the metabook-py wheel
+    - name: Build the metabook-py sdist and wheel
       shell: bash
       run: |
-        uv build --wheel --out-dir dist/
-        echo "Built wheels:"
-        ls -lh dist/*.whl
+        uv build --out-dir dist/
+        echo "Built distributions:"
+        ls -lh dist/
 
     - name: Upload artifact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
