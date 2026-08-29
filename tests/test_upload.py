@@ -73,6 +73,7 @@ async def test_upload_sends_bearer_token_and_folder(client, blob_token):
     )
     request = route.calls.last.request
     assert request.headers["authorization"] == "Bearer vercel_blob_rw_test_token"
+    assert request.headers["x-vercel-blob-access"] == settings.blob_access
     assert "/books/" in str(request.url)
 
 
