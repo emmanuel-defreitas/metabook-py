@@ -15,6 +15,25 @@ class BookInfo(BaseModel):
     subjects: list[str] = Field(default_factory=list)
 
 
+class UploadedBookInfo(BaseModel):
+    """Metadata extracted from an uploaded EPUB (no Gutenberg ID)."""
+
+    source: str = "upload"
+    title: str
+    authors: list[AuthorInfo] = Field(default_factory=list)
+    language: str = "en"
+    subjects: list[str] = Field(default_factory=list)
+    isbn: str | None = None
+
+
+class BlobInfo(BaseModel):
+    """Where the uploaded EPUB now lives in Vercel Blob storage."""
+
+    url: str
+    pathname: str
+    size_bytes: int
+
+
 class BookMatch(BaseModel):
     """Lightweight summary used in disambiguation lists."""
 

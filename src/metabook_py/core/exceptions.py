@@ -22,6 +22,22 @@ class TextUnavailableError(Exception):
         super().__init__(f"Text unavailable for Gutenberg book #{gutenberg_id}")
 
 
+class InvalidEpubError(Exception):
+    """Raised when an uploaded file is not a parseable EPUB."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"Invalid EPUB: {reason}")
+
+
+class BlobUploadError(Exception):
+    """Raised when the upload to Vercel Blob storage fails."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"Blob upload failed: {reason}")
+
+
 class UnsupportedFormatError(Exception):
     """Raised when no text or HTML format is present in the Gutendex formats dict."""
 

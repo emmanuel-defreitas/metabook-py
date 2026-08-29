@@ -5,6 +5,9 @@ Sample texts are intentionally minimal but structurally representative.
 All samples include the *** START/END *** boilerplate so stripping is tested too.
 """
 
+import zipfile
+from io import BytesIO
+
 import pytest
 
 STANDARD_BOOK = """
@@ -128,6 +131,73 @@ CHAPTER I
 
 *** END OF THE PROJECT GUTENBERG EBOOK ***
 """
+
+
+# ── EPUB builder (shared by test_epub.py and test_upload.py) ───────────────────
+
+CONTAINER_XML = """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+
+OPF_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">urn:isbn:978-0-14-143951-8</dc:identifier>
+    <dc:title>Pride and Prejudice</dc:title>
+    <dc:creator>Jane Austen</dc:creator>
+    <dc:language>en-GB</dc:language>
+    <dc:subject>Fiction</dc:subject>
+    <dc:subject>Romance</dc:subject>
+  </metadata>
+  <manifest>
+    {manifest}
+  </manifest>
+  <spine>
+    {spine}
+  </spine>
+</package>
+"""
+
+CHAPTER_XHTML = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>ignored</title><style>p {{ color: red }}</style></head>
+<body>
+  <h1>CHAPTER {roman}</h1>
+  <p>It is a truth universally acknowledged, that a single man in possession
+     of a good fortune, must be in want of a wife.</p>
+  <p>"My dear Mr. Bennet," said his lady to him one day. He replied that he had not.</p>
+</body>
+</html>
+"""
+
+
+def build_epub(
+    *,
+    chapters: int = 3,
+    with_mimetype: bool = True,
+    mimetype: str = "application/epub+zip",
+) -> bytes:
+    """Assemble a minimal but valid EPUB entirely in memory."""
+    buf = BytesIO()
+    romans = ["I", "II", "III", "IV", "V"]
+    manifest = "\n".join(
+        f'<item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>'
+        for i in range(chapters)
+    )
+    spine = "\n".join(f'<itemref idref="ch{i}"/>' for i in range(chapters))
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if with_mimetype:
+            zf.writestr("mimetype", mimetype)
+        zf.writestr("META-INF/container.xml", CONTAINER_XML)
+        zf.writestr("OEBPS/content.opf", OPF_TEMPLATE.format(manifest=manifest, spine=spine))
+        for i in range(chapters):
+            zf.writestr(f"OEBPS/ch{i}.xhtml", CHAPTER_XHTML.format(roman=romans[i]))
+    return buf.getvalue()
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
