@@ -6,8 +6,8 @@
 mod api;
 mod app;
 
-use gpui::{App, AppContext as _, TitlebarOptions, WindowOptions, px, size};
-use gpui_component::Root;
+use gpui::{App, AppContext as _, WindowOptions, px, size};
+use gpui_component::{Root, TitleBar};
 
 use crate::app::MetabookApp;
 
@@ -18,13 +18,11 @@ fn main() {
             gpui_component::init(cx);
 
             cx.spawn(async move |cx| {
+                // No native title bar: the in-app TitleBar owns dragging,
+                // double-click zoom, and the traffic-light inset.
                 let options = WindowOptions {
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Metabook".into()),
-                        ..Default::default()
-                    }),
                     window_min_size: Some(size(px(560.), px(440.))),
-                    ..Default::default()
+                    ..TitleBar::window_options()
                 };
                 cx.open_window(options, |window, cx| {
                     let app = cx.new(|cx| MetabookApp::new(window, cx));
