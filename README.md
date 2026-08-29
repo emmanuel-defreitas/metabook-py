@@ -16,11 +16,13 @@ make test               # run the test suite
 make docker-up          # or run it via docker compose
 ```
 
-EPUB uploads need a Vercel Blob read-write token in the environment (or `.env`):
+EPUB uploads need a Vercel Blob read-write token in the environment (or `.env` / `.env.local`):
 
 ```bash
 export BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
 ```
+
+If the project is linked to Vercel, `vercel env pull` writes the token to `.env.local` (gitignored), which the app loads automatically — values there override `.env`.
 
 CI/release pipeline scaffolded from [exegia/corpora-py](https://github.com/exegia/corpora-py): same branch model, GitHub Actions workflows, composite actions, and `make`-driven release automation.
 

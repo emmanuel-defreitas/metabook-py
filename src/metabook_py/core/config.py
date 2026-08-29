@@ -2,7 +2,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        # later files win, so .env.local (written by `vercel env pull`) overrides .env
+        env_file=(".env", ".env.local"),
+        env_file_encoding="utf-8",
+    )
 
     gutendex_base_url: str = "https://gutendex.com"
     cache_ttl: int = 86400  # 24 hours in seconds
