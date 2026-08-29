@@ -59,6 +59,7 @@ async def upload_epub(filename: str, content: bytes) -> BlobResult:
                 headers={
                     "Authorization": f"Bearer {settings.blob_read_write_token}",
                     "x-api-version": _BLOB_API_VERSION,
+                    "x-vercel-blob-access": settings.blob_access,
                     "x-content-type": "application/epub+zip",
                     "x-add-random-suffix": "1",
                 },

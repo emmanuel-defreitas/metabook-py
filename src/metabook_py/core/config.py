@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     blob_read_write_token: str = ""  # Vercel Blob RW token (BLOB_READ_WRITE_TOKEN)
     blob_api_url: str = "https://blob.vercel-storage.com"
     blob_folder: str = "books"
+    blob_access: str = "private"  # must match the connected store's access mode
     max_upload_bytes: int = 50 * 1024 * 1024  # 50 MB
     app_name: str = "Book Structure API"
     debug: bool = False
