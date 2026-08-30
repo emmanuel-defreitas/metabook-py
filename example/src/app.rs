@@ -312,11 +312,8 @@ impl MetabookApp {
         self.phase = match result {
             Ok(SearchOutcome::Analysis(analysis)) => {
                 let tree = Rc::new(analysis.tree);
-                // Top-level nodes start expanded, matching previous behavior.
-                let expanded: HashSet<SharedString> = tree
-                    .iter()
-                    .map(|n| SharedString::from(n.id.clone()))
-                    .collect();
+                // Everything starts collapsed.
+                let expanded: HashSet<SharedString> = HashSet::new();
                 let items = materialize_items(&tree, &expanded);
                 let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
                 self.expand_gen = 0;
@@ -450,6 +447,21 @@ impl MetabookApp {
             });
             cx.notify();
         }
+    }
+
+    /// Collapse every folder in the tree at once.
+    fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        let Phase::Done { tree, expanded, tree_state, .. } = &mut self.phase else {
+            return;
+        };
+        if expanded.is_empty() {
+            return;
+        }
+        expanded.clear();
+        self.last_expanded = None;
+        let items = materialize_items(tree, expanded);
+        tree_state.update(cx, |state, cx| state.set_items(items, cx));
+        cx.notify();
     }
 
     /// After any tree change, sync the JSON editor to the selected node:
@@ -911,12 +923,22 @@ impl MetabookApp {
         tree_state: Entity<TreeState>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        div()
+        v_flex()
             .size_full()
             .pr_3()
             .border_r_1()
             .border_color(cx.theme().border)
-            .child(tree(&tree_state, {
+            .child(
+                h_flex().justify_end().pb_1().child(
+                    Button::new("collapse-all")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ChevronsUpDown)
+                        .label("Collapse all")
+                        .on_click(cx.listener(|this, _, _, cx| this.collapse_all(cx))),
+                ),
+            )
+            .child(div().flex_1().min_h_0().child(tree(&tree_state, {
                 let expand_gen = self.expand_gen;
                 let last_expanded = self.last_expanded.clone();
                 move |ix, entry, selected, _, _| {
@@ -981,7 +1003,7 @@ impl MetabookApp {
                         item.child(content)
                     }
                 }
-            }))
+            })))
     }
 }
 
