@@ -73,9 +73,9 @@ class DetectedSchema:
 # Scripture: verse numbers at the start of a line, e.g. "1:1 In the beginning"
 VERSE_RE = re.compile(r"^\d+:\d+\s", re.MULTILINE)
 
-# Scripture: recognised book names as standalone lines
-SCRIPTURE_BOOK_RE = re.compile(
-    r"^(?:Genesis|Exodus|Leviticus|Numbers|Deuteronomy|Joshua|Judges|Ruth|"
+# Canonical scripture book names, shared by the two heading forms below.
+_SCRIPTURE_BOOK_NAMES = (
+    r"Genesis|Exodus|Leviticus|Numbers|Deuteronomy|Joshua|Judges|Ruth|"
     r"(?:First|Second|Third|Fourth)?\s*(?:Samuel|Kings|Chronicles)|Ezra|"
     r"Nehemiah|Esther|Job|Psalms?|Proverbs|Ecclesiastes|Song of Solomon|"
     r"Isaiah|Jeremiah|Lamentations|Ezekiel|Daniel|Hosea|Joel|Amos|Obadiah|"
@@ -84,9 +84,21 @@ SCRIPTURE_BOOK_RE = re.compile(
     r"(?:First|Second)?\s*Corinthians|Galatians|Ephesians|Philippians|"
     r"Colossians|(?:First|Second)?\s*Thessalonians|"
     r"(?:First|Second)?\s*Timothy|Titus|Philemon|Hebrews|James|"
-    r"(?:First|Second|Third)?\s*(?:Peter|John)|Jude|Revelation|"
-    r"BOOK\s+(?:OF\s+)?[A-Z][A-Z\s]+)\s*$",
-    re.IGNORECASE | re.MULTILINE,
+    r"(?:First|Second|Third)?\s*(?:Peter|John)|Jude|Revelation"
+)
+
+# Scripture: book headings as their own paragraph (blank-line separated), in
+# two forms: a bare book name ("GENESIS"), or a descriptive title containing a
+# book name ("The First Book of Moses: Called Genesis"). Anchoring both ends
+# to a paragraph boundary excludes wrapped verse lines and tables of contents
+# (whose entries sit on consecutive lines).
+SCRIPTURE_BOOK_RE = re.compile(
+    rf"(?:\A|(?<=\n\n))"
+    rf"(?:(?:{_SCRIPTURE_BOOK_NAMES})|"
+    rf"BOOK\s+(?:OF\s+)?[A-Z][A-Z\s]+|"
+    rf"The\s(?=[^\n]*\b(?:{_SCRIPTURE_BOOK_NAMES})\b)[^\n]{{0,69}}[^\s.!?])"
+    rf"[ \t]*(?=\n\n|\n?\Z)",
+    re.IGNORECASE,
 )
 
 # Parts / Volumes / Sections — top-level structural markers
