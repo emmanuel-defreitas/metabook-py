@@ -8,7 +8,8 @@
 //! states. Async requests carry a request index so a stale response can never
 //! overwrite a newer one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -27,6 +28,7 @@ use gpui_component::input::{
 use gpui_component::list::ListItem;
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::select::{Select, SelectState};
+use gpui_component::skeleton::Skeleton;
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeEvent, TreeItem, TreeState, tree};
@@ -59,10 +61,17 @@ enum Phase {
         ranges: HashMap<String, NodeSpan>,
         /// Node id currently synced to the editor.
         selected_node: Option<String>,
+        /// Source tree; `TreeItem`s are materialised lazily from this as the
+        /// user expands folders, so huge trees cost O(visible), not O(total).
+        tree: Rc<Vec<TreeNode>>,
+        /// Ids currently expanded in the tree.
+        expanded: HashSet<SharedString>,
         tree_state: Entity<TreeState>,
         /// Read-only JSON code editor (tree-sitter highlighting, folding).
-        editor_state: Entity<EditorState>,
-        decorations: gpui_component::input::TextDecorationCollection,
+        /// `None` while it initialises one frame after the result arrives —
+        /// a skeleton shows in its place so the tree is usable immediately.
+        editor_state: Option<Entity<EditorState>>,
+        decorations: Option<gpui_component::input::TextDecorationCollection>,
     },
     Failed { message: SharedString },
 }
@@ -302,44 +311,51 @@ impl MetabookApp {
         }
         self.phase = match result {
             Ok(SearchOutcome::Analysis(analysis)) => {
-                let items: Vec<TreeItem> =
-                    analysis.tree.iter().map(|n| to_tree_item(n, true)).collect();
+                let tree = Rc::new(analysis.tree);
+                // Top-level nodes start expanded, matching previous behavior.
+                let expanded: HashSet<SharedString> = tree
+                    .iter()
+                    .map(|n| SharedString::from(n.id.clone()))
+                    .collect();
+                let items = materialize_items(&tree, &expanded);
                 let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
                 self.expand_gen = 0;
                 self.last_expanded = None;
                 // No selection event exists; observe the state and react to
-                // whatever entry is selected after each change. Expansions do
-                // emit events, which drive the row entrance animation.
+                // whatever entry is selected after each change. Expansions
+                // emit events, which both materialise the newly revealed
+                // children and drive the row entrance animation.
                 cx.observe_in(&tree_state, window, Self::on_tree_changed).detach();
                 cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
-                    if let TreeEvent::Expanded(id) = event {
-                        this.expand_gen += 1;
-                        this.last_expanded = Some(id.clone());
-                        cx.notify();
+                    this.on_tree_toggle(event, cx);
+                })
+                .detach();
+
+                // Defer the editor: building a rope from a many-megabyte JSON
+                // string blocks the main thread, so paint the result frame
+                // (with a skeleton in the JSON pane) first.
+                let schema_json = SharedString::from(analysis.schema_json);
+                cx.spawn_in(window, {
+                    let schema_json = schema_json.clone();
+                    async move |this, cx| {
+                        this.update_in(cx, |this, window, cx| {
+                            this.init_editor(schema_json, window, cx)
+                        })
+                        .ok();
                     }
                 })
                 .detach();
 
-                let editor_state = cx.new(|cx| {
-                    EditorState::new(window, cx)
-                        .language("json")
-                        .line_number(true)
-                        .folding(true)
-                        .default_value(SharedString::from(analysis.schema_json.clone()))
-                });
-                let decorations = editor_state.update(cx, |state, cx| {
-                    state.set_readonly(true, cx);
-                    state.create_decorations_collection(vec![], cx)
-                });
-
                 Phase::Done {
                     title: analysis.title.into(),
-                    schema_json: analysis.schema_json.into(),
+                    schema_json,
                     ranges: analysis.ranges,
                     selected_node: None,
+                    tree,
+                    expanded,
                     tree_state,
-                    editor_state,
-                    decorations,
+                    editor_state: None,
+                    decorations: None,
                 }
             }
             Ok(SearchOutcome::Matches(matches)) => Phase::Matches { matches },
@@ -381,6 +397,61 @@ impl MetabookApp {
         cx.notify();
     }
 
+    /// One frame after a result arrives, build the JSON editor behind the
+    /// skeleton and swap it in.
+    fn init_editor(
+        &mut self,
+        schema_json: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Phase::Done { editor_state, decorations, .. } = &mut self.phase else {
+            return;
+        };
+        if editor_state.is_some() {
+            return;
+        }
+        let state = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language("json")
+                .line_number(true)
+                .folding(true)
+                .default_value(schema_json)
+        });
+        let collection = state.update(cx, |state, cx| {
+            state.set_readonly(true, cx);
+            state.create_decorations_collection(vec![], cx)
+        });
+        *editor_state = Some(state);
+        *decorations = Some(collection);
+        cx.notify();
+    }
+
+    /// Materialise the children of a folder the first time it expands and
+    /// keep the expansion set in sync.
+    fn on_tree_toggle(&mut self, event: &TreeEvent, cx: &mut Context<Self>) {
+        let Phase::Done { tree, expanded, tree_state, .. } = &mut self.phase else {
+            return;
+        };
+        let changed = match event {
+            TreeEvent::Expanded(id) => {
+                self.last_expanded = Some(id.clone());
+                self.expand_gen += 1;
+                expanded.insert(id.clone())
+            }
+            TreeEvent::Collapsed(id) => expanded.remove(id),
+        };
+        if changed {
+            let items = materialize_items(tree, expanded);
+            let selected = tree_state.read(cx).selected_index();
+            tree_state.update(cx, |state, cx| {
+                state.set_items(items, cx);
+                state.set_selected_index(selected, cx);
+            });
+            cx.notify();
+        }
+    }
+
     /// After any tree change, sync the JSON editor to the selected node:
     /// move the cursor to its first line (scrolling it into view) and
     /// decorate its byte range with a highlight.
@@ -400,13 +471,15 @@ impl MetabookApp {
         else {
             return;
         };
+        let (Some(editor_state), Some(decorations)) = (editor_state.clone(), decorations.clone())
+        else {
+            return;
+        };
         if *selected_node == selected_id {
             return;
         }
         *selected_node = selected_id.clone();
         let span = selected_id.and_then(|id| ranges.get(&id).cloned());
-        let editor_state = editor_state.clone();
-        let decorations = decorations.clone();
         if let Some(span) = span {
             editor_state.update(cx, |state, cx| {
                 state.set_cursor_position(Position::new(span.line as u32, 0), window, cx);
@@ -755,7 +828,7 @@ impl MetabookApp {
         &self,
         title: SharedString,
         tree_state: Entity<TreeState>,
-        editor_state: Entity<EditorState>,
+        editor_state: Option<Entity<EditorState>>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let copied = self.copied;
@@ -800,10 +873,26 @@ impl MetabookApp {
                         )
                         .child(
                             resizable_panel().child(
-                                div()
-                                    .size_full()
-                                    .pl_3()
-                                    .child(Editor::new(&editor_state).h(relative(1.))),
+                                div().size_full().pl_3().map(|pane| match &editor_state {
+                                    Some(state) => {
+                                        pane.child(Editor::new(state).h(relative(1.)))
+                                    }
+                                    // The editor is still initialising —
+                                    // skeleton lines hold its place.
+                                    None => pane.child(
+                                        v_flex().gap_2().pt_2().children(
+                                            (0..14).map(|ix| {
+                                                let width = relative(match ix % 4 {
+                                                    0 => 0.55,
+                                                    1 => 0.85,
+                                                    2 => 0.7,
+                                                    _ => 0.4,
+                                                });
+                                                Skeleton::new().h_3().w(width)
+                                            }),
+                                        ),
+                                    ),
+                                }),
                             ),
                         ),
                 ),
@@ -889,14 +978,34 @@ impl MetabookApp {
     }
 }
 
-/// Convert an API tree node into a `TreeItem`; only top-level nodes start expanded.
-fn to_tree_item(node: &TreeNode, expanded: bool) -> TreeItem {
-    TreeItem::new(
-        SharedString::from(node.id.clone()),
-        SharedString::from(node.label.clone()),
-    )
-    .expanded(expanded)
-    .children(node.children.iter().map(|c| to_tree_item(c, false)).collect::<Vec<_>>())
+/// Build `TreeItem`s for the visible portion of the tree only: children are
+/// materialised for expanded folders; collapsed folders get a single hidden
+/// placeholder child so they still render a disclosure chevron. Expanding a
+/// folder re-materialises with its real children (see `on_tree_toggle`).
+fn materialize_items(nodes: &[TreeNode], expanded: &HashSet<SharedString>) -> Vec<TreeItem> {
+    nodes.iter().map(|n| materialize_item(n, expanded)).collect()
+}
+
+fn materialize_item(node: &TreeNode, expanded: &HashSet<SharedString>) -> TreeItem {
+    let id = SharedString::from(node.id.clone());
+    let is_expanded = expanded.contains(&id);
+    let item = TreeItem::new(id, SharedString::from(node.label.clone())).expanded(is_expanded);
+    if node.children.is_empty() {
+        item
+    } else if is_expanded {
+        item.children(
+            node.children
+                .iter()
+                .map(|c| materialize_item(c, expanded))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        // Hidden while collapsed; replaced with real children on expand.
+        item.child(TreeItem::new(
+            SharedString::from(format!("{}.placeholder", node.id)),
+            SharedString::default(),
+        ))
+    }
 }
 
 impl Render for MetabookApp {
