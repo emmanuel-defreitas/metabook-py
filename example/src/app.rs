@@ -482,6 +482,13 @@ impl MetabookApp {
         let span = selected_id.and_then(|id| ranges.get(&id).cloned());
         if let Some(span) = span {
             editor_state.update(cx, |state, cx| {
+                // gpui-component has no public targeted unfold, and the cursor
+                // stops at a fold boundary if the span is inside one; cycling
+                // folding off/on clears all folds (candidates survive) so the
+                // cursor can reach the span. Once longbridge/gpui-component#2872
+                // (unfold_ranges_containing) lands, unfold just span.bytes.start.
+                state.set_folding(false, window, cx);
+                state.set_folding(true, window, cx);
                 state.set_cursor_position(Position::new(span.line as u32, 0), window, cx);
             });
             decorations.set(
