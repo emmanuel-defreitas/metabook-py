@@ -5,13 +5,34 @@
 //! ready-to-display [`Analysis`] or a user-facing error message.
 
 use std::collections::HashMap;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
+
+/// ureq's `into_string()` refuses bodies over 10 MB, which deep `detail=`
+/// levels on large books exceed easily; read manually with a far larger cap.
+const MAX_BODY_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Read the full response body, replacing `into_string()`'s 10 MB cap.
+fn read_body(resp: ureq::Response) -> Result<String, String> {
+    let mut text = String::new();
+    resp.into_reader()
+        .take(MAX_BODY_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|err| format!("Couldn't read the API response: {err}"))?;
+    if text.len() as u64 > MAX_BODY_BYTES {
+        return Err(
+            "The response is too large to display (over 200 MB). \
+             Try a shallower detail level, like Sentence or Paragraph."
+                .into(),
+        );
+    }
+    Ok(text)
+}
 
 /// A successful structural analysis, ready for presentation.
 pub struct Analysis {
@@ -20,8 +41,17 @@ pub struct Analysis {
     pub schema_json: String,
     /// The structure nodes as a plain label tree (no book text).
     pub tree: Vec<TreeNode>,
-    /// Node id → (first, last) 0-based line of that node in `schema_json`.
-    pub ranges: HashMap<String, (usize, usize)>,
+    /// Node id → location of that node in `schema_json`.
+    pub ranges: HashMap<String, NodeSpan>,
+}
+
+/// Where a structure node lives in the pretty-printed JSON.
+#[derive(Clone)]
+pub struct NodeSpan {
+    /// 0-based first line of the node.
+    pub line: usize,
+    /// Byte range of the node's JSON object.
+    pub bytes: std::ops::Range<usize>,
 }
 
 /// One node of the structural tree: a part/book, chapter, or verse/paragraph.
@@ -131,9 +161,7 @@ fn multipart_body(filename: &str, bytes: &[u8]) -> (Vec<u8>, String) {
 }
 
 fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
-    let text = resp
-        .into_string()
-        .map_err(|err| format!("Couldn't read the API response: {err}"))?;
+    let text = read_body(resp)?;
     let value: Value = serde_json::from_str(&text)
         .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
 
@@ -163,7 +191,7 @@ enum NodeCtx {
     Node(String),
 }
 
-fn pretty_print_with_ranges(value: &Value) -> (String, HashMap<String, (usize, usize)>) {
+fn pretty_print_with_ranges(value: &Value) -> (String, HashMap<String, NodeSpan>) {
     let mut out = String::new();
     let mut line = 0usize;
     let mut ranges = HashMap::new();
@@ -182,7 +210,7 @@ fn write_value(
     ctx: &NodeCtx,
     out: &mut String,
     line: &mut usize,
-    ranges: &mut HashMap<String, (usize, usize)>,
+    ranges: &mut HashMap<String, NodeSpan>,
 ) {
     let pad = " ".repeat(indent + 2);
     match value {
@@ -209,11 +237,15 @@ fn write_value(
             push(out, line, "[\n");
             for (ix, item) in items.iter().enumerate() {
                 push(out, line, &pad);
-                let start = *line;
+                let start_line = *line;
+                let start_byte = out.len();
                 let item_ctx = element_ctx(ctx, ix);
                 write_value(item, indent + 2, &item_ctx, out, line, ranges);
                 if let NodeCtx::Node(id) = &item_ctx {
-                    ranges.entry(id.clone()).or_insert((start, *line));
+                    ranges.entry(id.clone()).or_insert(NodeSpan {
+                        line: start_line,
+                        bytes: start_byte..out.len(),
+                    });
                 }
                 let sep = if ix + 1 < items.len() { ",\n" } else { "\n" };
                 push(out, line, sep);
@@ -363,12 +395,9 @@ fn node_label(node: &Value, fallback_kind: &str) -> String {
 }
 
 fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
-    let value: Value = resp
-        .into_string()
-        .map_err(|err| format!("Couldn't read the API response: {err}"))
-        .and_then(|text| {
-            serde_json::from_str(&text).map_err(|err| format!("Invalid JSON from the API: {err}"))
-        })?;
+    let value: Value = read_body(resp).and_then(|text| {
+        serde_json::from_str(&text).map_err(|err| format!("Invalid JSON from the API: {err}"))
+    })?;
 
     let matches = value["matches"]
         .as_array()
@@ -402,8 +431,7 @@ fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
 }
 
 fn status_message(code: u16, resp: ureq::Response) -> String {
-    let detail = resp
-        .into_string()
+    let detail = read_body(resp)
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .map(|value| value["detail"].clone())
