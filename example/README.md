@@ -29,7 +29,7 @@ The first build compiles GPUI from source and takes a while.
 
 ## Optional: run as a macOS app bundle
 
-`Metabook.app` is a minimal bundle wrapper (just an `Info.plist`) so the app has a real bundle identity — useful for macOS permission prompts and Finder launching. Copy the built binary into it:
+`Metabook.app` is a minimal bundle wrapper (an `Info.plist` plus the app icon in `Contents/Resources/AppIcon.icns`, exported from the project's Sketch logo) so the app has a real bundle identity — useful for macOS permission prompts, Finder launching, and a proper Dock icon. Copy the built binary into it:
 
 ```bash
 cargo build && cp -f target/debug/metabook-example Metabook.app/Contents/MacOS/ && open Metabook.app
