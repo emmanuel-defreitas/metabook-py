@@ -8,6 +8,7 @@ mod app;
 
 use gpui::{App, AppContext as _, WindowOptions, px, size};
 use gpui_component::{Root, TitleBar};
+use gpui_navigator::{Route, init_router, navigate};
 
 use crate::app::MetabookApp;
 
@@ -26,6 +27,24 @@ fn main() {
                 };
                 cx.open_window(options, |window, cx| {
                     let app = cx.new(|cx| MetabookApp::new(window, cx));
+
+                    // The search and upload forms are routes; the outlet in
+                    // MetabookApp::render animates transitions between them.
+                    // Pages read a dedicated flags entity, never the app
+                    // entity itself (which is mid-render when the outlet runs).
+                    let handles = app.update(cx, |this, cx| this.form_handles(cx));
+                    let search_handles = handles.clone();
+                    let upload_handles = handles;
+                    init_router(cx, move |router| {
+                        router.add_route(Route::new("/", move |_, cx, _| {
+                            MetabookApp::search_form(&search_handles, cx)
+                        }));
+                        router.add_route(Route::new("/upload", move |_, cx, _| {
+                            MetabookApp::upload_form(&upload_handles, cx)
+                        }));
+                    });
+                    navigate(cx, "/");
+
                     cx.new(|cx| Root::new(app, window, cx))
                 })
                 .expect("failed to open window");

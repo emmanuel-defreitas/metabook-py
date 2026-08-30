@@ -41,8 +41,17 @@ pub struct Analysis {
     pub schema_json: String,
     /// The structure nodes as a plain label tree (no book text).
     pub tree: Vec<TreeNode>,
-    /// Node id → (first, last) 0-based line of that node in `schema_json`.
-    pub ranges: HashMap<String, (usize, usize)>,
+    /// Node id → location of that node in `schema_json`.
+    pub ranges: HashMap<String, NodeSpan>,
+}
+
+/// Where a structure node lives in the pretty-printed JSON.
+#[derive(Clone)]
+pub struct NodeSpan {
+    /// 0-based first line of the node.
+    pub line: usize,
+    /// Byte range of the node's JSON object.
+    pub bytes: std::ops::Range<usize>,
 }
 
 /// One node of the structural tree: a part/book, chapter, or verse/paragraph.
@@ -182,7 +191,7 @@ enum NodeCtx {
     Node(String),
 }
 
-fn pretty_print_with_ranges(value: &Value) -> (String, HashMap<String, (usize, usize)>) {
+fn pretty_print_with_ranges(value: &Value) -> (String, HashMap<String, NodeSpan>) {
     let mut out = String::new();
     let mut line = 0usize;
     let mut ranges = HashMap::new();
@@ -201,7 +210,7 @@ fn write_value(
     ctx: &NodeCtx,
     out: &mut String,
     line: &mut usize,
-    ranges: &mut HashMap<String, (usize, usize)>,
+    ranges: &mut HashMap<String, NodeSpan>,
 ) {
     let pad = " ".repeat(indent + 2);
     match value {
@@ -228,11 +237,15 @@ fn write_value(
             push(out, line, "[\n");
             for (ix, item) in items.iter().enumerate() {
                 push(out, line, &pad);
-                let start = *line;
+                let start_line = *line;
+                let start_byte = out.len();
                 let item_ctx = element_ctx(ctx, ix);
                 write_value(item, indent + 2, &item_ctx, out, line, ranges);
                 if let NodeCtx::Node(id) = &item_ctx {
-                    ranges.entry(id.clone()).or_insert((start, *line));
+                    ranges.entry(id.clone()).or_insert(NodeSpan {
+                        line: start_line,
+                        bytes: start_byte..out.len(),
+                    });
                 }
                 let sep = if ix + 1 < items.len() { ",\n" } else { "\n" };
                 push(out, line, sep);
