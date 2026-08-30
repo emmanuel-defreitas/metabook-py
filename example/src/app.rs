@@ -8,31 +8,38 @@
 //! states. Async requests carry a request index so a stale response can never
 //! overwrite a newer one.
 
-use std::collections::HashMap;
-use std::ops::Range;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, UniformListScrollHandle, Window, div,
-    px, uniform_list,
+    AnyElement, App, AppContext as _, BorrowAppContext as _, ClipboardItem, Context, ElementId,
+    Entity, HighlightStyle,
+    InteractiveElement as _, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Window, div, px, radians, relative,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{
+    Editor, EditorState, Input, InputEvent, InputState, Position, TextDecoration,
+};
 use gpui_component::list::ListItem;
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::select::{Select, SelectState};
+use gpui_component::skeleton::Skeleton;
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::tree::{TreeItem, TreeState, tree};
+use gpui_component::tree::{TreeEvent, TreeItem, TreeState, tree};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _, StyledExt as _,
-    h_flex, v_flex,
+    Theme, ThemeMode, TitleBar, h_flex, v_flex,
 };
+use gpui_motion::{MotionExt as _, Spring, Tween};
+use gpui_navigator::{GlobalRouter, Transition as RouteTransition, router_view};
 
-use crate::api::{self, BookMatch, SearchOutcome, TreeNode};
+use crate::api::{self, BookMatch, NodeSpan, SearchOutcome, TreeNode};
 
 const TAB_SEARCH: usize = 0;
 const TAB_UPLOAD: usize = 1;
@@ -50,15 +57,41 @@ enum Phase {
     Done {
         title: SharedString,
         schema_json: SharedString,
-        json_lines: Vec<SharedString>,
-        /// Node id → (first, last) 0-based JSON line of that node.
-        ranges: HashMap<String, (usize, usize)>,
-        /// Lines currently highlighted from the tree selection.
-        highlight: Option<(usize, usize)>,
+        /// Node id → location of that node in the JSON document.
+        ranges: HashMap<String, NodeSpan>,
+        /// Node id currently synced to the editor.
+        selected_node: Option<String>,
+        /// Source tree; `TreeItem`s are materialised lazily from this as the
+        /// user expands folders, so huge trees cost O(visible), not O(total).
+        tree: Rc<Vec<TreeNode>>,
+        /// Ids currently expanded in the tree.
+        expanded: HashSet<SharedString>,
         tree_state: Entity<TreeState>,
-        json_scroll: UniformListScrollHandle,
+        /// Read-only JSON code editor (tree-sitter highlighting, folding).
+        /// `None` while it initialises one frame after the result arrives —
+        /// a skeleton shows in its place so the tree is usable immediately.
+        editor_state: Option<Entity<EditorState>>,
+        decorations: Option<gpui_component::input::TextDecorationCollection>,
     },
     Failed { message: SharedString },
+}
+
+/// The little bit of dynamic state the route pages need. Kept in its own
+/// entity so the router outlet can read it while `MetabookApp` itself is
+/// mid-render (reading the app entity there would be re-entrant).
+pub struct FormFlags {
+    processing: bool,
+    epub_name: Option<SharedString>,
+}
+
+/// Everything a route page needs, captured once at router setup.
+#[derive(Clone)]
+pub struct FormHandles {
+    pub app: gpui::WeakEntity<MetabookApp>,
+    query: Entity<InputState>,
+    isbn: Entity<InputState>,
+    detail: Entity<SelectState<Vec<&'static str>>>,
+    flags: Entity<FormFlags>,
 }
 
 pub struct MetabookApp {
@@ -67,10 +100,18 @@ pub struct MetabookApp {
     query: Entity<InputState>,
     isbn: Entity<InputState>,
     detail: Entity<SelectState<Vec<&'static str>>>,
+    flags: Entity<FormFlags>,
     epub_path: Option<PathBuf>,
     phase: Phase,
     /// Incremented per request; responses for an older index are discarded.
     request_ix: usize,
+    /// True briefly after Copy JSON, driving the button's success feedback.
+    copied: bool,
+    /// Bumped on every tree expansion; keys the entrance animation so only
+    /// the most recently revealed rows animate (no flashing on scroll).
+    expand_gen: u64,
+    /// The folder id expanded most recently.
+    last_expanded: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -99,6 +140,8 @@ impl MetabookApp {
             )
         });
 
+        let flags = cx.new(|_| FormFlags { processing: false, epub_name: None });
+
         let subscriptions = vec![
             cx.subscribe_in(&query, window, Self::on_input_event),
             cx.subscribe_in(&isbn, window, Self::on_input_event),
@@ -110,9 +153,13 @@ impl MetabookApp {
             query,
             isbn,
             detail,
+            flags,
             epub_path: None,
             phase: Phase::Idle,
             request_ix: 0,
+            copied: false,
+            expand_gen: 0,
+            last_expanded: None,
             _subscriptions: subscriptions,
         }
     }
@@ -121,12 +168,37 @@ impl MetabookApp {
         &mut self,
         _: &Entity<InputState>,
         event: &InputEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let InputEvent::PressEnter { .. } = event {
-            self.start_search(cx);
+            self.start_search(window, cx);
         }
+    }
+
+    /// Handles for the router's page builders.
+    pub fn form_handles(&self, cx: &Context<Self>) -> FormHandles {
+        FormHandles {
+            app: cx.entity().downgrade(),
+            query: self.query.clone(),
+            isbn: self.isbn.clone(),
+            detail: self.detail.clone(),
+            flags: self.flags.clone(),
+        }
+    }
+
+    fn set_flags(&mut self, cx: &mut Context<Self>) {
+        let processing = self.is_processing();
+        let epub_name: Option<SharedString> = self.epub_path.as_ref().map(|path| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string())
+                .into()
+        });
+        self.flags.update(cx, |flags, _| {
+            flags.processing = processing;
+            flags.epub_name = epub_name;
+        });
     }
 
     fn is_processing(&self) -> bool {
@@ -150,7 +222,7 @@ impl MetabookApp {
 
     // ── Commands ───────────────────────────────────────────────────────────────
 
-    fn start_search(&mut self, cx: &mut Context<Self>) {
+    fn start_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_processing() {
             return;
         }
@@ -169,11 +241,12 @@ impl MetabookApp {
         self.begin_request(
             "Searching Gutendex…",
             move || api::search(&base, &query, &isbn, &detail),
+            window,
             cx,
         );
     }
 
-    fn select_match(&mut self, gutenberg_id: u64, cx: &mut Context<Self>) {
+    fn select_match(&mut self, gutenberg_id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_processing() {
             return;
         }
@@ -182,11 +255,12 @@ impl MetabookApp {
         self.begin_request(
             "Fetching and scanning the book text…",
             move || api::fetch_by_id(&base, gutenberg_id, &detail).map(SearchOutcome::Analysis),
+            window,
             cx,
         );
     }
 
-    fn start_upload(&mut self, cx: &mut Context<Self>) {
+    fn start_upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_processing() {
             return;
         }
@@ -199,6 +273,7 @@ impl MetabookApp {
         self.begin_request(
             "Uploading and scanning the EPUB…",
             move || api::upload(&base, &path, &detail).map(SearchOutcome::Analysis),
+            window,
             cx,
         );
     }
@@ -207,16 +282,18 @@ impl MetabookApp {
         &mut self,
         message: &'static str,
         work: impl FnOnce() -> Result<SearchOutcome, String> + Send + 'static,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.request_ix += 1;
         let ix = self.request_ix;
         self.phase = Phase::Processing { message: message.into() };
+        self.set_flags(cx);
         cx.notify();
 
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_spawn(async move { work() }).await;
-            this.update(cx, |this, cx| this.finish_request(ix, result, cx))
+            this.update_in(cx, |this, window, cx| this.finish_request(ix, result, window, cx))
                 .ok();
         })
         .detach();
@@ -226,6 +303,7 @@ impl MetabookApp {
         &mut self,
         ix: usize,
         result: Result<SearchOutcome, String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if ix != self.request_ix {
@@ -233,29 +311,54 @@ impl MetabookApp {
         }
         self.phase = match result {
             Ok(SearchOutcome::Analysis(analysis)) => {
-                let items: Vec<TreeItem> =
-                    analysis.tree.iter().map(|n| to_tree_item(n, true)).collect();
+                let tree = Rc::new(analysis.tree);
+                // Everything starts collapsed.
+                let expanded: HashSet<SharedString> = HashSet::new();
+                let items = materialize_items(&tree, &expanded);
                 let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
+                self.expand_gen = 0;
+                self.last_expanded = None;
                 // No selection event exists; observe the state and react to
-                // whatever entry is selected after each change.
-                cx.observe(&tree_state, Self::on_tree_changed).detach();
+                // whatever entry is selected after each change. Expansions
+                // emit events, which both materialise the newly revealed
+                // children and drive the row entrance animation.
+                cx.observe_in(&tree_state, window, Self::on_tree_changed).detach();
+                cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
+                    this.on_tree_toggle(event, cx);
+                })
+                .detach();
+
+                // Defer the editor: building a rope from a many-megabyte JSON
+                // string blocks the main thread, so paint the result frame
+                // (with a skeleton in the JSON pane) first.
+                let schema_json = SharedString::from(analysis.schema_json);
+                cx.spawn_in(window, {
+                    let schema_json = schema_json.clone();
+                    async move |this, cx| {
+                        this.update_in(cx, |this, window, cx| {
+                            this.init_editor(schema_json, window, cx)
+                        })
+                        .ok();
+                    }
+                })
+                .detach();
+
                 Phase::Done {
                     title: analysis.title.into(),
-                    json_lines: analysis
-                        .schema_json
-                        .lines()
-                        .map(|l| SharedString::from(l.to_string()))
-                        .collect(),
-                    schema_json: analysis.schema_json.into(),
+                    schema_json,
                     ranges: analysis.ranges,
-                    highlight: None,
+                    selected_node: None,
+                    tree,
+                    expanded,
                     tree_state,
-                    json_scroll: UniformListScrollHandle::new(),
+                    editor_state: None,
+                    decorations: None,
                 }
             }
             Ok(SearchOutcome::Matches(matches)) => Phase::Matches { matches },
             Err(message) => Phase::Failed { message: message.into() },
         };
+        self.set_flags(cx);
         cx.notify();
     }
 
@@ -287,67 +390,242 @@ impl MetabookApp {
                 message: format!("“{}” isn't an .epub file.", path.display()).into(),
             };
         }
+        self.set_flags(cx);
         cx.notify();
     }
 
-    /// After any tree change, sync the JSON pane to the selected node.
-    fn on_tree_changed(&mut self, state: Entity<TreeState>, cx: &mut Context<Self>) {
+    /// One frame after a result arrives, build the JSON editor behind the
+    /// skeleton and swap it in.
+    fn init_editor(
+        &mut self,
+        schema_json: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Phase::Done { editor_state, decorations, .. } = &mut self.phase else {
+            return;
+        };
+        if editor_state.is_some() {
+            return;
+        }
+        let state = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language("json")
+                .line_number(true)
+                .folding(true)
+                .default_value(schema_json)
+        });
+        let collection = state.update(cx, |state, cx| {
+            state.set_readonly(true, cx);
+            state.create_decorations_collection(vec![], cx)
+        });
+        *editor_state = Some(state);
+        *decorations = Some(collection);
+        cx.notify();
+    }
+
+    /// Materialise the children of a folder the first time it expands and
+    /// keep the expansion set in sync.
+    fn on_tree_toggle(&mut self, event: &TreeEvent, cx: &mut Context<Self>) {
+        let Phase::Done { tree, expanded, tree_state, .. } = &mut self.phase else {
+            return;
+        };
+        let changed = match event {
+            TreeEvent::Expanded(id) => {
+                self.last_expanded = Some(id.clone());
+                self.expand_gen += 1;
+                expanded.insert(id.clone())
+            }
+            TreeEvent::Collapsed(id) => expanded.remove(id),
+        };
+        if changed {
+            let items = materialize_items(tree, expanded);
+            let selected = tree_state.read(cx).selected_index();
+            tree_state.update(cx, |state, cx| {
+                state.set_items(items, cx);
+                state.set_selected_index(selected, cx);
+            });
+            cx.notify();
+        }
+    }
+
+    /// Collapse every folder in the tree at once.
+    fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        let Phase::Done { tree, expanded, tree_state, .. } = &mut self.phase else {
+            return;
+        };
+        if expanded.is_empty() {
+            return;
+        }
+        expanded.clear();
+        self.last_expanded = None;
+        let items = materialize_items(tree, expanded);
+        tree_state.update(cx, |state, cx| state.set_items(items, cx));
+        cx.notify();
+    }
+
+    /// After any tree change, sync the JSON editor to the selected node:
+    /// move the cursor to its first line (scrolling it into view) and
+    /// decorate its byte range with a highlight.
+    fn on_tree_changed(
+        &mut self,
+        state: Entity<TreeState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let selected_id = state
             .read(cx)
             .selected_entry()
             .map(|entry| entry.item().id.to_string());
-        let Phase::Done { ranges, highlight, json_scroll, .. } = &mut self.phase else {
+        let highlight_bg = cx.theme().selection;
+        let Phase::Done { ranges, selected_node, editor_state, decorations, .. } =
+            &mut self.phase
+        else {
             return;
         };
-        let range = selected_id.and_then(|id| ranges.get(&id).copied());
-        if *highlight != range {
-            *highlight = range;
-            if let Some((start, _)) = range {
-                json_scroll.scroll_to_item(start, ScrollStrategy::Top);
-            }
-            cx.notify();
+        let (Some(editor_state), Some(decorations)) = (editor_state.clone(), decorations.clone())
+        else {
+            return;
+        };
+        if *selected_node == selected_id {
+            return;
         }
+        *selected_node = selected_id.clone();
+        let span = selected_id.and_then(|id| ranges.get(&id).cloned());
+        if let Some(span) = span {
+            editor_state.update(cx, |state, cx| {
+                // gpui-component has no public targeted unfold, and the cursor
+                // stops at a fold boundary if the span is inside one; cycling
+                // folding off/on clears all folds (candidates survive) so the
+                // cursor can reach the span. Once longbridge/gpui-component#2872
+                // (unfold_ranges_containing) lands, unfold just span.bytes.start.
+                state.set_folding(false, window, cx);
+                state.set_folding(true, window, cx);
+                state.set_cursor_position(Position::new(span.line as u32, 0), window, cx);
+            });
+            decorations.set(
+                vec![TextDecoration::new(
+                    span.bytes,
+                    HighlightStyle {
+                        background_color: Some(highlight_bg),
+                        ..Default::default()
+                    },
+                )],
+                cx,
+            );
+        } else {
+            decorations.set(Vec::new(), cx);
+        }
+        cx.notify();
     }
 
     fn copy_schema(&mut self, cx: &mut Context<Self>) {
         if let Phase::Done { schema_json, .. } = &self.phase {
             cx.write_to_clipboard(ClipboardItem::new_string(schema_json.to_string()));
+            self.copied = true;
+            cx.notify();
+            // Revert the button's success state after a beat.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(1400))
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.copied = false;
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }
+    }
+
+    fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mode = if cx.theme().is_dark() {
+            ThemeMode::Light
+        } else {
+            ThemeMode::Dark
+        };
+        Theme::change(mode, Some(window), cx);
+        cx.notify();
     }
 
     // ── Regions ────────────────────────────────────────────────────────────────
 
-    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
-        h_flex()
-            .items_center()
-            .justify_between()
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(div().text_lg().font_semibold().child("Metabook"))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Structural schema for any book — no text ever leaves the API"),
-                    ),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(self.api_base.clone()),
-            )
+    /// Custom title bar: app identity on the left, API base and the theme
+    /// toggle on the right. Replaces the native macOS title bar.
+    fn render_title_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme_icon = if cx.theme().is_dark() {
+            IconName::Sun
+        } else {
+            IconName::Moon
+        };
+        TitleBar::new().child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .pr_2()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .min_w_0()
+                        .child(div().text_sm().font_semibold().child("Metabook"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .truncate()
+                                .child("Structural schema for any book"),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .flex_none()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.api_base.clone()),
+                        )
+                        .child(
+                            Button::new("toggle-theme")
+                                .ghost()
+                                .small()
+                                .icon(theme_icon)
+                                .tooltip("Switch between light and dark mode")
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.toggle_theme(window, cx)
+                                    }),
+                                ),
+                        ),
+                ),
+        )
     }
 
-    fn render_search_form(&self, cx: &Context<Self>) -> impl IntoElement {
-        let processing = self.is_processing();
+    // ── Route pages ────────────────────────────────────────────────────────────
+    //
+    // These build the search/upload forms from outside the entity's own
+    // render pass (the router outlet calls them while `MetabookApp` renders),
+    // so they read state via `Entity::read` and wire handlers with plain
+    // closures that only `update` on interaction.
+
+    pub(crate) fn search_form(handles: &FormHandles, cx: &mut App) -> AnyElement {
+        let processing = handles.flags.read(cx).processing;
+        let (query, isbn, detail) = (
+            handles.query.clone(),
+            handles.isbn.clone(),
+            handles.detail.clone(),
+        );
         h_flex()
             .gap_2()
             .items_center()
-            .child(div().flex_1().child(Input::new(&self.query)))
-            .child(div().w_48().child(Input::new(&self.isbn)))
-            .child(div().w_40().child(Select::new(&self.detail)))
+            .child(div().flex_1().child(Input::new(&query)))
+            .child(div().w_48().child(Input::new(&isbn)))
+            .child(div().w_40().child(Select::new(&detail)))
             .child(
                 Button::new("search")
                     .primary()
@@ -355,20 +633,23 @@ impl MetabookApp {
                     .label("Search")
                     .loading(processing)
                     .disabled(processing)
-                    .on_click(cx.listener(|this, _, _, cx| this.start_search(cx))),
+                    .on_click({
+                        let app = handles.app.clone();
+                        move |_, window, cx| {
+                            app.update(cx, |this, cx| this.start_search(window, cx)).ok();
+                        }
+                    }),
             )
+            .into_any_element()
     }
 
-    fn render_upload_form(&self, cx: &Context<Self>) -> impl IntoElement {
-        let processing = self.is_processing();
-        let chosen: SharedString = match &self.epub_path {
-            Some(path) => path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.display().to_string())
-                .into(),
-            None => "No file chosen".into(),
+    pub(crate) fn upload_form(handles: &FormHandles, cx: &mut App) -> AnyElement {
+        let (processing, epub_name) = {
+            let flags = handles.flags.read(cx);
+            (flags.processing, flags.epub_name.clone())
         };
+        let has_file = epub_name.is_some();
+        let chosen: SharedString = epub_name.unwrap_or_else(|| "No file chosen".into());
 
         h_flex()
             .gap_2()
@@ -377,7 +658,12 @@ impl MetabookApp {
                 Button::new("choose-epub")
                     .label("Choose EPUB…")
                     .disabled(processing)
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_epub(cx))),
+                    .on_click({
+                        let app = handles.app.clone();
+                        move |_, _, cx| {
+                            app.update(cx, |this, cx| this.choose_epub(cx)).ok();
+                        }
+                    }),
             )
             .child(
                 div()
@@ -388,16 +674,22 @@ impl MetabookApp {
                     .text_color(cx.theme().muted_foreground)
                     .child(chosen),
             )
-            .child(div().w_40().child(Select::new(&self.detail)))
+            .child(div().w_40().child(Select::new(&handles.detail)))
             .child(
                 Button::new("analyze")
                     .primary()
                     .icon(IconName::ArrowUp)
                     .label("Analyze")
                     .loading(processing)
-                    .disabled(processing || self.epub_path.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| this.start_upload(cx))),
+                    .disabled(processing || !has_file)
+                    .on_click({
+                        let app = handles.app.clone();
+                        move |_, window, cx| {
+                            app.update(cx, |this, cx| this.start_upload(window, cx)).ok();
+                        }
+                    }),
             )
+            .into_any_element()
     }
 
     fn render_content(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -406,14 +698,8 @@ impl MetabookApp {
             Phase::Processing { message } => self.render_processing(message.clone(), cx).into_any_element(),
             Phase::Matches { matches } => self.render_matches(matches.clone(), cx).into_any_element(),
             Phase::Failed { message } => self.render_failed(message.clone(), cx).into_any_element(),
-            Phase::Done { title, json_lines, tree_state, json_scroll, .. } => self
-                .render_result(
-                    title.clone(),
-                    json_lines.len(),
-                    tree_state.clone(),
-                    json_scroll.clone(),
-                    cx,
-                )
+            Phase::Done { title, tree_state, editor_state, .. } => self
+                .render_result(title.clone(), tree_state.clone(), editor_state.clone(), cx)
                 .into_any_element(),
         };
         div().flex_1().min_h_0().child(content)
@@ -518,12 +804,16 @@ impl MetabookApp {
                                         Button::new(("analyse-match", id))
                                             .small()
                                             .label("Schema")
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.select_match(id, cx)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.select_match(id, window, cx)
                                             })),
                                     ),
                             )
-                            .on_click(cx.listener(move |this, _, _, cx| this.select_match(id, cx)))
+                            .on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.select_match(id, window, cx)
+                                }),
+                            )
                     })),
             )
     }
@@ -556,11 +846,18 @@ impl MetabookApp {
     fn render_result(
         &self,
         title: SharedString,
-        line_count: usize,
         tree_state: Entity<TreeState>,
-        json_scroll: UniformListScrollHandle,
+        editor_state: Option<Entity<EditorState>>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let copied = self.copied;
+        let success = cx.theme().success;
+        let copy_button = Button::new("copy-schema")
+            .ghost()
+            .small()
+            .icon(if copied { IconName::Check } else { IconName::Copy })
+            .label(if copied { "Copied" } else { "Copy JSON" })
+            .on_click(cx.listener(|this, _, _, cx| this.copy_schema(cx)));
         v_flex()
             .size_full()
             .gap_2()
@@ -570,12 +867,18 @@ impl MetabookApp {
                     .justify_between()
                     .child(div().font_semibold().child(title))
                     .child(
-                        Button::new("copy-schema")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Copy)
-                            .label("Copy JSON")
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_schema(cx))),
+                        // Pop-in feedback: the id changes with `copied`, so a
+                        // fresh spring runs on both copy and revert.
+                        div()
+                            .when(copied, |el| el.text_color(success))
+                            .child(copy_button)
+                            .with_motion(
+                                ElementId::Name(format!("copy-fb-{copied}").into()),
+                                1.0f32,
+                                Spring::wobbly(),
+                                |el, t: f32| el.opacity(0.4 + 0.6 * t),
+                            )
+                            .initial(0.0),
                     ),
             )
             .child(
@@ -589,51 +892,30 @@ impl MetabookApp {
                         )
                         .child(
                             resizable_panel().child(
-                                div()
-                                    .size_full()
-                                    .pl_3()
-                                    .font_family(cx.theme().mono_font_family.clone())
-                                    .text_sm()
-                                    .child(
-                                        uniform_list(
-                                            "schema-json-lines",
-                                            line_count,
-                                            cx.processor(Self::render_json_lines),
-                                        )
-                                        .size_full()
-                                        .track_scroll(&json_scroll),
+                                div().size_full().pl_3().map(|pane| match &editor_state {
+                                    Some(state) => {
+                                        pane.child(Editor::new(state).h(relative(1.)))
+                                    }
+                                    // The editor is still initialising —
+                                    // skeleton lines hold its place.
+                                    None => pane.child(
+                                        v_flex().gap_2().pt_2().children(
+                                            (0..14).map(|ix| {
+                                                let width = relative(match ix % 4 {
+                                                    0 => 0.55,
+                                                    1 => 0.85,
+                                                    2 => 0.7,
+                                                    _ => 0.4,
+                                                });
+                                                Skeleton::new().h_3().w(width)
+                                            }),
+                                        ),
                                     ),
+                                }),
                             ),
                         ),
                 ),
             )
-    }
-
-    fn render_json_lines(
-        &mut self,
-        visible: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::AnyElement> {
-        let Phase::Done { json_lines, highlight, .. } = &self.phase else {
-            return Vec::new();
-        };
-        let muted = cx.theme().muted;
-        visible
-            .filter_map(|ix| {
-                let text = json_lines.get(ix)?.clone();
-                let highlighted =
-                    highlight.is_some_and(|(start, end)| ix >= start && ix <= end);
-                Some(
-                    div()
-                        .px_2()
-                        .whitespace_nowrap()
-                        .when(highlighted, |line| line.bg(muted))
-                        .child(text)
-                        .into_any_element(),
-                )
-            })
-            .collect()
     }
 
     fn render_structure_tree(
@@ -641,41 +923,118 @@ impl MetabookApp {
         tree_state: Entity<TreeState>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        div()
+        v_flex()
             .size_full()
             .pr_3()
             .border_r_1()
             .border_color(cx.theme().border)
-            .child(tree(&tree_state, |ix, entry, selected, _, _| {
-                let icon = if !entry.is_folder() {
-                    IconName::File
-                } else if entry.is_expanded() {
-                    IconName::FolderOpen
-                } else {
-                    IconName::Folder
-                };
-                ListItem::new(ix)
-                    .selected(selected)
-                    .pl(px(16.) * entry.depth() as f32 + px(4.))
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(Icon::new(icon).small())
-                            .child(div().text_sm().truncate().child(entry.item().label.clone())),
-                    )
-            }))
+            .child(
+                h_flex().justify_end().pb_1().child(
+                    Button::new("collapse-all")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ChevronsUpDown)
+                        .label("Collapse all")
+                        .on_click(cx.listener(|this, _, _, cx| this.collapse_all(cx))),
+                ),
+            )
+            .child(div().flex_1().min_h_0().child(tree(&tree_state, {
+                let expand_gen = self.expand_gen;
+                let last_expanded = self.last_expanded.clone();
+                move |ix, entry, selected, _, _| {
+                    let id = entry.item().id.clone();
+                    let expanded = entry.is_expanded();
+
+                    // The chevron animates toward its rotation target, so it
+                    // renders settled when rows scroll into view and only
+                    // animates on an actual toggle — no flashing.
+                    let icon = if entry.is_folder() {
+                        let target = if expanded { 1.0f32 } else { 0.0 };
+                        div()
+                            .with_motion(
+                                ElementId::Name(format!("chev-{id}").into()),
+                                target,
+                                Spring::from_duration(0.2),
+                                |wrapper, t: f32| {
+                                    wrapper.child(
+                                        Icon::new(IconName::ChevronRight)
+                                            .small()
+                                            .rotate(radians(t * FRAC_PI_2)),
+                                    )
+                                },
+                            )
+                            .into_any_element()
+                    } else {
+                        Icon::new(IconName::File).small().into_any_element()
+                    };
+
+                    let content = h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(icon)
+                        .child(div().text_sm().truncate().child(entry.item().label.clone()));
+
+                    // Only rows revealed by the latest expansion animate in;
+                    // everything else renders statically (scrolling never
+                    // replays an entrance animation).
+                    let just_revealed = last_expanded
+                        .as_ref()
+                        .is_some_and(|parent| {
+                            id.starts_with(&format!("{parent}.")) && id.as_ref() != parent.as_ref()
+                        });
+
+                    let item = ListItem::new(ix)
+                        .selected(selected)
+                        .pl(px(16.) * entry.depth() as f32 + px(4.));
+                    if just_revealed {
+                        item.child(
+                            content
+                                .with_motion(
+                                    ElementId::Name(
+                                        format!("reveal-{expand_gen}-{id}").into(),
+                                    ),
+                                    1.0f32,
+                                    Tween::new(0.18),
+                                    |row, t: f32| row.opacity(t),
+                                )
+                                .initial(0.0),
+                        )
+                    } else {
+                        item.child(content)
+                    }
+                }
+            })))
     }
 }
 
-/// Convert an API tree node into a `TreeItem`; only top-level nodes start expanded.
-fn to_tree_item(node: &TreeNode, expanded: bool) -> TreeItem {
-    TreeItem::new(
-        SharedString::from(node.id.clone()),
-        SharedString::from(node.label.clone()),
-    )
-    .expanded(expanded)
-    .children(node.children.iter().map(|c| to_tree_item(c, false)).collect::<Vec<_>>())
+/// Build `TreeItem`s for the visible portion of the tree only: children are
+/// materialised for expanded folders; collapsed folders get a single hidden
+/// placeholder child so they still render a disclosure chevron. Expanding a
+/// folder re-materialises with its real children (see `on_tree_toggle`).
+fn materialize_items(nodes: &[TreeNode], expanded: &HashSet<SharedString>) -> Vec<TreeItem> {
+    nodes.iter().map(|n| materialize_item(n, expanded)).collect()
+}
+
+fn materialize_item(node: &TreeNode, expanded: &HashSet<SharedString>) -> TreeItem {
+    let id = SharedString::from(node.id.clone());
+    let is_expanded = expanded.contains(&id);
+    let item = TreeItem::new(id, SharedString::from(node.label.clone())).expanded(is_expanded);
+    if node.children.is_empty() {
+        item
+    } else if is_expanded {
+        item.children(
+            node.children
+                .iter()
+                .map(|c| materialize_item(c, expanded))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        // Hidden while collapsed; replaced with real children on expand.
+        item.child(TreeItem::new(
+            SharedString::from(format!("{}.placeholder", node.id)),
+            SharedString::default(),
+        ))
+    }
 }
 
 impl Render for MetabookApp {
@@ -684,27 +1043,41 @@ impl Render for MetabookApp {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .gap_3()
-            .p_4()
-            .child(self.render_header(cx))
+            .child(self.render_title_bar(cx))
             .child(
-                TabBar::new("source-tabs")
-                    .selected_index(self.tab_ix)
-                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        this.tab_ix = *ix;
-                        cx.notify();
-                    }))
-                    .child(Tab::new().label("Search"))
-                    .child(Tab::new().label("Upload EPUB")),
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_3()
+                    .p_4()
+                    .pt_2()
+                    .child(
+                        TabBar::new("source-tabs")
+                            .selected_index(self.tab_ix)
+                            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                                if this.tab_ix == *ix {
+                                    return;
+                                }
+                                // Slide toward the tab being selected.
+                                let (path, transition) = if *ix == TAB_UPLOAD {
+                                    ("/upload", RouteTransition::slide_left(200))
+                                } else {
+                                    ("/", RouteTransition::slide_right(200))
+                                };
+                                this.tab_ix = *ix;
+                                cx.update_global::<GlobalRouter, _>(|router, cx| {
+                                    router.push_with_transition(path.to_string(), transition, cx);
+                                });
+                                cx.notify();
+                            }))
+                            .child(Tab::new().label("Search"))
+                            .child(Tab::new().label("Upload EPUB")),
+                    )
+                    // The active form is a route; the router view animates
+                    // transitions between / (search) and /upload.
+                    .child(div().w_full().child(router_view(window, cx)))
+                    .child(self.render_content(cx)),
             )
-            .map(|this| {
-                if self.tab_ix == TAB_UPLOAD {
-                    this.child(self.render_upload_form(cx))
-                } else {
-                    this.child(self.render_search_form(cx))
-                }
-            })
-            .child(self.render_content(cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }
