@@ -95,6 +95,22 @@ export BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
 
 If the project is linked to Vercel, `vercel env pull` writes the token to `.env.local` (gitignored), which the app loads automatically — values there override `.env`.
 
+### Uploads collection (MongoDB, optional)
+
+Every book a user uploads or selects from search results is persisted as a
+document in a MongoDB `uploads` collection: the book metadata, format
+(`epub`), the Vercel Blob link, and the scan state (scanned yet, last
+scanned, scope, schema, total token count). The structure tree itself is
+never stored. Set `MONGODB_URI` to enable (empty = disabled, no behavior
+change); re-selecting the same Gutenberg book updates its document instead
+of duplicating it:
+
+```bash
+export MONGODB_URI=mongodb://localhost:27017
+```
+
+Browse what's stored via `GET /api/books/uploads`.
+
 ## 🌐 REST API
 
 | Method | Endpoint | Purpose |
@@ -102,6 +118,7 @@ If the project is linked to Vercel, `vercel env pull` writes the token to `.env.
 | `GET` | `/api/books/structure` | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`, `tokenizer`) |
 | `GET` | `/api/books/structure/schemas` | List the supported structural schemas |
 | `POST` | `/api/books/upload` | Upload an EPUB and analyse it |
+| `GET` | `/api/books/uploads` | List persisted upload documents (needs `MONGODB_URI`) |
 | `GET` | `/health` | Liveness + cache stats |
 
 Interactive OpenAPI docs live at `/api/docs`.
