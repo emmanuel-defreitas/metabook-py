@@ -8,6 +8,11 @@
 //! states. Async requests carry a request index so a stale response can never
 //! overwrite a newer one.
 
+mod components;
+mod helpers;
+mod methods;
+mod styles;
+
 use std::collections::{HashMap, HashSet};
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
@@ -16,51 +21,30 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, radians, relative, AnyElement, App, AppContext as _, BorrowAppContext as _,
-    ClipboardItem, Context, ElementId, Entity, HighlightStyle, InteractiveElement as _,
-    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Window,
+    div, px, radians, relative, AppContext as _, BorrowAppContext as _, ClipboardItem, Context,
+    ElementId, Entity, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement,
+    PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
+    Window,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{
-    Editor, EditorState, Input, InputEvent, InputState, Position, TextDecoration,
-};
+use gpui_component::input::{Editor, EditorState, InputState, Position, TextDecoration};
 use gpui_component::list::ListItem;
 use gpui_component::resizable::{h_resizable, resizable_panel};
-use gpui_component::select::{Select, SelectState};
+use gpui_component::select::SelectState;
 use gpui_component::skeleton::Skeleton;
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::tree::{tree, TreeEvent, TreeItem, TreeState};
+use gpui_component::tree::{tree, TreeEvent, TreeState};
 use gpui_component::{
-    h_flex, highlighter::LanguageRegistry, v_flex, ActiveTheme as _, Disableable as _, Icon,
-    IconName, Root, Sizable as _, StyledExt as _, Theme, ThemeMode, TitleBar,
+    h_flex, highlighter::LanguageRegistry, v_flex, ActiveTheme as _, Icon, IconName, Root,
+    Sizable as _, StyledExt as _, Theme, ThemeMode, TitleBar,
 };
 use gpui_motion::{MotionExt as _, Spring, Tween};
 use gpui_navigator::{router_view, GlobalRouter, Transition as RouteTransition};
 
 use crate::api::{self, BookMatch, NodeSpan, SearchOutcome, TreeNode};
-
-const TAB_SEARCH: usize = 0;
-const TAB_UPLOAD: usize = 1;
-
-/// Options for the detail Select, index-aligned with `DETAIL_VALUES`.
-const DETAIL_OPTIONS: [&str; 4] = ["Paragraphs", "Sentences", "Clauses", "Words"];
-const DETAIL_VALUES: [&str; 4] = ["paragraph", "sentence", "clause", "word"];
-
-/// Options for the tokenizer Select. Except for the first ("No tokens", which
-/// omits the API parameter), each label is the Hugging Face repository name
-/// sent as the `tokenizer` query parameter verbatim.
-const TOKENIZER_OPTIONS: [&str; 6] = [
-    "No tokens",
-    "bert-base-uncased",
-    "gpt2",
-    "roberta-base",
-    "distilbert-base-uncased",
-    "xlm-roberta-base",
-];
-/// Default Select index into `TOKENIZER_OPTIONS`: `bert-base-uncased`.
-const TOKENIZER_DEFAULT_IX: usize = 1;
+use helpers::{materialize_items, META_SEPARATOR};
+use styles::{DETAIL_OPTIONS, TAB_SEARCH, TAB_UPLOAD, TOKENIZER_DEFAULT_IX, TOKENIZER_OPTIONS};
 
 /// The workflow phase shown in the content region.
 enum Phase {
@@ -198,73 +182,6 @@ impl MetabookApp {
             last_expanded: None,
             _subscriptions: subscriptions,
         }
-    }
-
-    fn on_input_event(
-        &mut self,
-        _: &Entity<InputState>,
-        event: &InputEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let InputEvent::PressEnter { .. } = event {
-            self.start_search(window, cx);
-        }
-    }
-
-    /// Handles for the router's page builders.
-    pub fn form_handles(&self, cx: &Context<Self>) -> FormHandles {
-        FormHandles {
-            app: cx.entity().downgrade(),
-            query: self.query.clone(),
-            isbn: self.isbn.clone(),
-            tokenizer: self.tokenizer.clone(),
-            detail: self.detail.clone(),
-            flags: self.flags.clone(),
-        }
-    }
-
-    fn set_flags(&mut self, cx: &mut Context<Self>) {
-        let processing = self.is_processing();
-        let epub_name: Option<SharedString> = self.epub_path.as_ref().map(|path| {
-            path.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.display().to_string())
-                .into()
-        });
-        self.flags.update(cx, |flags, _| {
-            flags.processing = processing;
-            flags.epub_name = epub_name;
-        });
-    }
-
-    fn is_processing(&self) -> bool {
-        matches!(self.phase, Phase::Processing { .. })
-    }
-
-    /// The API `detail` value for the current Select choice.
-    fn detail_value(&self, cx: &Context<Self>) -> String {
-        self.detail
-            .read(cx)
-            .selected_value()
-            .and_then(|label| {
-                DETAIL_OPTIONS
-                    .iter()
-                    .position(|o| o == label)
-                    .map(|ix| DETAIL_VALUES[ix])
-            })
-            .unwrap_or("paragraph")
-            .to_string()
-    }
-
-    /// The API `tokenizer` value; empty means "don't count tokens".
-    fn tokenizer_value(&self, cx: &Context<Self>) -> String {
-        self.tokenizer
-            .read(cx)
-            .selected_value()
-            .filter(|label| **label != TOKENIZER_OPTIONS[0])
-            .map(|label| label.to_string())
-            .unwrap_or_default()
     }
 
     // ── Commands ───────────────────────────────────────────────────────────────
@@ -724,7 +641,7 @@ impl MetabookApp {
             .id("status-bar")
             .w_full()
             .flex_none()
-            .h_7()
+            .h_10()
             .items_center()
             .justify_between()
             .px_3()
@@ -762,97 +679,6 @@ impl MetabookApp {
                             .child(div().child(json_label)),
                     ),
             )
-    }
-
-    // ── Route pages ────────────────────────────────────────────────────────────
-    //
-    // These build the search/upload forms from outside the entity's own
-    // render pass (the router outlet calls them while `MetabookApp` renders),
-    // so they read state via `Entity::read` and wire handlers with plain
-    // closures that only `update` on interaction.
-
-    pub(crate) fn search_form(handles: &FormHandles, cx: &mut App) -> AnyElement {
-        let processing = handles.flags.read(cx).processing;
-        let (query, isbn, tokenizer, detail) = (
-            handles.query.clone(),
-            handles.isbn.clone(),
-            handles.tokenizer.clone(),
-            handles.detail.clone(),
-        );
-        h_flex()
-            .gap_2()
-            .items_center()
-            .child(div().flex_1().child(Input::new(&query)))
-            .child(div().w(px(176.)).child(Input::new(&isbn)))
-            .child(div().w_56().child(Select::new(&tokenizer)))
-            .child(div().w(px(144.)).child(Select::new(&detail)))
-            .child(
-                Button::new("search")
-                    .primary()
-                    .icon(IconName::Search)
-                    .label("Search")
-                    .loading(processing)
-                    .disabled(processing)
-                    .on_click({
-                        let app = handles.app.clone();
-                        move |_, window, cx| {
-                            app.update(cx, |this, cx| this.start_search(window, cx))
-                                .ok();
-                        }
-                    }),
-            )
-            .into_any_element()
-    }
-
-    pub(crate) fn upload_form(handles: &FormHandles, cx: &mut App) -> AnyElement {
-        let (processing, epub_name) = {
-            let flags = handles.flags.read(cx);
-            (flags.processing, flags.epub_name.clone())
-        };
-        let has_file = epub_name.is_some();
-        let chosen: SharedString = epub_name.unwrap_or_else(|| "No file chosen".into());
-
-        h_flex()
-            .gap_2()
-            .items_center()
-            .child(
-                Button::new("choose-epub")
-                    .label("Choose EPUB…")
-                    .disabled(processing)
-                    .on_click({
-                        let app = handles.app.clone();
-                        move |_, _, cx| {
-                            app.update(cx, |this, cx| this.choose_epub(cx)).ok();
-                        }
-                    }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(chosen),
-            )
-            .child(div().w_56().child(Select::new(&handles.tokenizer)))
-            .child(div().w(px(144.)).child(Select::new(&handles.detail)))
-            .child(
-                Button::new("analyze")
-                    .primary()
-                    .icon(Icon::default().path("icons/document-magnifying-glass.svg"))
-                    .label("Analyze")
-                    .loading(processing)
-                    .disabled(processing || !has_file)
-                    .on_click({
-                        let app = handles.app.clone();
-                        move |_, window, cx| {
-                            app.update(cx, |this, cx| this.start_upload(window, cx))
-                                .ok();
-                        }
-                    }),
-            )
-            .into_any_element()
     }
 
     fn render_content(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -996,7 +822,6 @@ impl MetabookApp {
                 .p_4()
                 .border_1()
                 .border_color(cx.theme().border)
-
                 .rounded(cx.theme().radius)
                 .child(
                     h_flex()
@@ -1186,50 +1011,6 @@ impl MetabookApp {
                     }
                 }
             })))
-    }
-}
-
-/// Build `TreeItem`s for the visible portion of the tree only: children are
-/// materialised for expanded folders; collapsed folders get a single hidden
-/// placeholder child so they still render a disclosure chevron. Expanding a
-/// folder re-materialises with its real children (see `on_tree_toggle`).
-fn materialize_items(nodes: &[TreeNode], expanded: &HashSet<SharedString>) -> Vec<TreeItem> {
-    nodes
-        .iter()
-        .map(|n| materialize_item(n, expanded))
-        .collect()
-}
-
-/// Joins a node's name and its counts inside the single label string a
-/// `TreeItem` can carry; the render closure splits them back apart. A control
-/// character can't appear in book text, so — unlike " — " — it never falsely
-/// splits a chapter heading that happens to contain a dash.
-const META_SEPARATOR: char = '\u{1f}';
-
-fn materialize_item(node: &TreeNode, expanded: &HashSet<SharedString>) -> TreeItem {
-    let id = SharedString::from(node.id.clone());
-    let is_expanded = expanded.contains(&id);
-    let label = if node.meta.is_empty() {
-        node.label.clone()
-    } else {
-        format!("{}{META_SEPARATOR}{}", node.label, node.meta)
-    };
-    let item = TreeItem::new(id, SharedString::from(label)).expanded(is_expanded);
-    if node.children.is_empty() {
-        item
-    } else if is_expanded {
-        item.children(
-            node.children
-                .iter()
-                .map(|c| materialize_item(c, expanded))
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        // Hidden while collapsed; replaced with real children on expand.
-        item.child(TreeItem::new(
-            SharedString::from(format!("{}.placeholder", node.id)),
-            SharedString::default(),
-        ))
     }
 }
 
