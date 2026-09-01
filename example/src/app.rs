@@ -702,7 +702,7 @@ impl MetabookApp {
             .child(
                 Button::new("analyze")
                     .primary()
-                    .icon(IconName::ArrowUp)
+                    .icon(Icon::default().path("icons/document-magnifying-glass.svg"))
                     .label("Analyze")
                     .loading(processing)
                     .disabled(processing || !has_file)
@@ -910,7 +910,7 @@ impl MetabookApp {
                     h_resizable("result-split")
                         .child(
                             resizable_panel()
-                                .size(px(300.))
+                                .size(px(360.))
                                 .size_range(px(200.)..px(560.))
                                 .child(self.render_structure_tree(tree_state, cx)),
                         )
@@ -965,7 +965,7 @@ impl MetabookApp {
             .child(div().flex_1().min_h_0().child(tree(&tree_state, {
                 let expand_gen = self.expand_gen;
                 let last_expanded = self.last_expanded.clone();
-                move |ix, entry, selected, _, _| {
+                move |ix, entry, selected, _, cx| {
                     let id = entry.item().id.clone();
                     let expanded = entry.is_expanded();
 
@@ -992,11 +992,28 @@ impl MetabookApp {
                         Icon::new(IconName::File).small().into_any_element()
                     };
 
+                    // "Paragraph 1 — 2 sentences · 24 words · 31 tokens" splits
+                    // into a name that truncates and a counts suffix that never
+                    // shrinks, so the token counts survive a narrow panel.
+                    let label = entry.item().label.clone();
+                    let (name, counts) = match label.rsplit_once(" — ") {
+                        Some((name, counts)) => (name.to_string(), Some(counts.to_string())),
+                        None => (label.to_string(), None),
+                    };
                     let content = h_flex()
                         .gap_2()
                         .items_center()
                         .child(icon)
-                        .child(div().text_sm().truncate().child(entry.item().label.clone()));
+                        .child(div().text_sm().truncate().child(name))
+                        .when_some(counts, |row, counts| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(counts),
+                            )
+                        });
 
                     // Only rows revealed by the latest expansion animate in;
                     // everything else renders statically (scrolling never

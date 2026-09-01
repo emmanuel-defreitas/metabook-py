@@ -6,15 +6,37 @@
 mod api;
 mod app;
 
-use gpui::{App, AppContext as _, WindowOptions, px, size};
+use std::borrow::Cow;
+
+use gpui::{App, AppContext as _, AssetSource, Result, SharedString, WindowOptions, px, size};
 use gpui_component::{Root, TitleBar};
 use gpui_navigator::{Route, init_router, navigate};
 
 use crate::app::MetabookApp;
 
+/// The component library's embedded icons, plus this app's own. Custom SVGs
+/// live under `assets/` and are compiled in; anything we don't carry falls
+/// through to `gpui_component_assets`.
+struct Assets;
+
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        match path {
+            "icons/document-magnifying-glass.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/document-magnifying-glass.svg"
+            )))),
+            _ => gpui_component_assets::Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        gpui_component_assets::Assets.list(path)
+    }
+}
+
 fn main() {
     gpui_platform::application()
-        .with_assets(gpui_component_assets::Assets)
+        .with_assets(Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
 
