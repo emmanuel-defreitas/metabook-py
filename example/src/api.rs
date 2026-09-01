@@ -59,6 +59,10 @@ pub struct TreeNode {
     /// Stable positional id: "n{i}" for top-level, then ".{j}" per child level.
     pub id: String,
     pub label: String,
+    /// Secondary counts ("2 sentences · 24 words · 31 tokens"); empty when the
+    /// node has none. Rendered muted after the label and truncated first when
+    /// the tree panel is narrow, so the label itself always stays readable.
+    pub meta: String,
     pub children: Vec<TreeNode>,
 }
 
@@ -318,6 +322,7 @@ fn top_node(node: &Value, ix: usize, leaf_name: &str) -> TreeNode {
         // Part / volume / section / book
         TreeNode {
             label: node_label(node, "Section"),
+            meta: String::new(),
             children: children
                 .iter()
                 .enumerate()
@@ -338,6 +343,7 @@ fn chapter_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     });
     TreeNode {
         label: node_label(node, "Chapter"),
+        meta: String::new(),
         children,
         id,
     }
@@ -363,12 +369,21 @@ fn child_nodes(
         .unwrap_or_default()
 }
 
+/// "1 sentence" / "3 sentences".
+fn count(n: u64, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
 /// " · N tokens" when the node carries a token count (a `tokenizer` was
 /// requested), empty otherwise.
 fn token_suffix(node: &Value) -> String {
     node["token_count"]
         .as_u64()
-        .map(|tokens| format!(" · {tokens} tokens"))
+        .map(|tokens| format!(" · {}", count(tokens, "token")))
         .unwrap_or_default()
 }
 
@@ -380,7 +395,12 @@ fn paragraph_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     TreeNode {
         children: child_nodes(node, "sentences", &id, sentence_node),
         id,
-        label: format!("{leaf_name} {index} — {sentences} sentences · {words} words{tokens}"),
+        label: format!("{leaf_name} {index}"),
+        meta: format!(
+            "{} · {}{tokens}",
+            count(sentences, "sentence"),
+            count(words, "word")
+        ),
     }
 }
 
@@ -392,7 +412,12 @@ fn sentence_node(node: &Value, id: String) -> TreeNode {
     TreeNode {
         children: child_nodes(node, "clauses", &id, clause_node),
         id,
-        label: format!("Sentence {index} — {clauses} clauses · {words} words{tokens}"),
+        label: format!("Sentence {index}"),
+        meta: format!(
+            "{} · {}{tokens}",
+            count(clauses, "clause"),
+            count(words, "word")
+        ),
     }
 }
 
@@ -403,7 +428,8 @@ fn clause_node(node: &Value, id: String) -> TreeNode {
     TreeNode {
         children: child_nodes(node, "words", &id, word_node),
         id,
-        label: format!("Clause {index} — {words} words{tokens}"),
+        label: format!("Clause {index}"),
+        meta: format!("{}{tokens}", count(words, "word")),
     }
 }
 
@@ -412,6 +438,7 @@ fn word_node(node: &Value, id: String) -> TreeNode {
     TreeNode {
         id,
         label: format!("Word {index}"),
+        meta: String::new(),
         children: Vec::new(),
     }
 }
@@ -535,10 +562,13 @@ mod tests {
         });
         let tree = build_tree(&structure);
         let paragraph = &tree[0].children[0];
-        assert_eq!(paragraph.label, "Paragraph 1 — 2 sentences · 24 words · 31 tokens");
+        assert_eq!(paragraph.label, "Paragraph 1");
+        assert_eq!(paragraph.meta, "2 sentences · 24 words · 31 tokens");
         let sentence = &paragraph.children[0];
-        assert_eq!(sentence.label, "Sentence 1 — 1 clauses · 12 words · 15 tokens");
-        assert_eq!(sentence.children[0].label, "Clause 1 — 12 words · 15 tokens");
+        assert_eq!(sentence.label, "Sentence 1");
+        assert_eq!(sentence.meta, "1 clause · 12 words · 15 tokens");
+        assert_eq!(sentence.children[0].label, "Clause 1");
+        assert_eq!(sentence.children[0].meta, "12 words · 15 tokens");
     }
 
     #[test]
@@ -548,6 +578,7 @@ mod tests {
             "nodes": [{"index": 1, "sentence_count": 2, "word_count": 24}],
         });
         let tree = build_tree(&structure);
-        assert_eq!(tree[0].label, "Paragraph 1 — 2 sentences · 24 words");
+        assert_eq!(tree[0].label, "Paragraph 1");
+        assert_eq!(tree[0].meta, "2 sentences · 24 words");
     }
 }

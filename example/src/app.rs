@@ -992,11 +992,13 @@ impl MetabookApp {
                         Icon::new(IconName::File).small().into_any_element()
                     };
 
-                    // "Paragraph 1 — 2 sentences · 24 words · 31 tokens" splits
-                    // into a name that truncates and a counts suffix that never
-                    // shrinks, so the token counts survive a narrow panel.
+                    // The materialised label carries the node's counts behind
+                    // META_SEPARATOR ("Paragraph 1␟2 sentences · 24 words ·
+                    // 31 tokens"): the name truncates while the counts render
+                    // as muted text that never shrinks, so token counts
+                    // survive a narrow panel.
                     let label = entry.item().label.clone();
-                    let (name, counts) = match label.rsplit_once(" — ") {
+                    let (name, counts) = match label.split_once(META_SEPARATOR) {
                         Some((name, counts)) => (name.to_string(), Some(counts.to_string())),
                         None => (label.to_string(), None),
                     };
@@ -1056,10 +1058,21 @@ fn materialize_items(nodes: &[TreeNode], expanded: &HashSet<SharedString>) -> Ve
     nodes.iter().map(|n| materialize_item(n, expanded)).collect()
 }
 
+/// Joins a node's name and its counts inside the single label string a
+/// `TreeItem` can carry; the render closure splits them back apart. A control
+/// character can't appear in book text, so — unlike " — " — it never falsely
+/// splits a chapter heading that happens to contain a dash.
+const META_SEPARATOR: char = '\u{1f}';
+
 fn materialize_item(node: &TreeNode, expanded: &HashSet<SharedString>) -> TreeItem {
     let id = SharedString::from(node.id.clone());
     let is_expanded = expanded.contains(&id);
-    let item = TreeItem::new(id, SharedString::from(node.label.clone())).expanded(is_expanded);
+    let label = if node.meta.is_empty() {
+        node.label.clone()
+    } else {
+        format!("{}{META_SEPARATOR}{}", node.label, node.meta)
+    };
+    let item = TreeItem::new(id, SharedString::from(label)).expanded(is_expanded);
     if node.children.is_empty() {
         item
     } else if is_expanded {
