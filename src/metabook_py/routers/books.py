@@ -4,6 +4,7 @@ REST router — /api/books/
 GET  /api/books/structure         → BookStructureResponse | DisambiguationResult
 GET  /api/books/structure/schemas → list[SchemaInfo]
 POST /api/books/upload            → BookUploadResponse
+GET  /api/books/uploads           → list[UploadRecord]
 """
 
 import time
@@ -39,12 +40,18 @@ from metabook_py.models.structure import (
     TokenizerInfo,
     UploadMetaInfo,
 )
+from metabook_py.models.upload import UploadRecord
 from metabook_py.services.blob import upload_epub
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
+from metabook_py.services.store import (
+    get_upload_store,
+    scan_update_doc,
+    upload_doc,
+)
 from metabook_py.services.tokenizers import TokenEncoder, get_encoder
 
 router = APIRouter(prefix="/books", tags=["books"])
@@ -203,6 +210,11 @@ async def get_book_structure(
             detail={"error": "gutendex_unreachable", "message": exc.reason},
         ) from exc
 
+    # A book was selected from the search results — persist it (unscanned)
+    # so a later text-fetch failure still leaves a record behind.
+    store = get_upload_store()
+    await store.record_gutenberg_book(book_info)
+
     # ── 2. Fetch text ──────────────────────────────────────────────────────────
     try:
         text, was_cached = await fetch_book_text(
@@ -223,6 +235,11 @@ async def get_book_structure(
     # ── 4. Build metadata tree ─────────────────────────────────────────────────
     nodes, summary = build_structure_tree(
         text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
+    )
+
+    # The scan ran — mark the stored document as scanned with its results.
+    await store.record_scan(
+        book_info.gutenberg_id, scan_update_doc(schema, detail, summary, encoder)
     )
 
     processing_ms = int((time.monotonic() - t0) * 1000)
@@ -321,17 +338,25 @@ async def upload_book(
         parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
     )
 
+    uploaded_book = UploadedBookInfo(
+        title=parsed.metadata.title,
+        authors=[AuthorInfo(name=a) for a in parsed.metadata.authors],
+        language=parsed.metadata.language,
+        subjects=parsed.metadata.subjects,
+        isbn=parsed.metadata.isbn,
+    )
+    blob_info = BlobInfo(url=blob.url, pathname=blob.pathname, size_bytes=blob.size)
+
+    # ── 4. Persist the upload document (metadata + scan results, never the tree)
+    await get_upload_store().record_upload(
+        upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
+    )
+
     processing_ms = int((time.monotonic() - t0) * 1000)
 
     return BookUploadResponse(
-        book=UploadedBookInfo(
-            title=parsed.metadata.title,
-            authors=[AuthorInfo(name=a) for a in parsed.metadata.authors],
-            language=parsed.metadata.language,
-            subjects=parsed.metadata.subjects,
-            isbn=parsed.metadata.isbn,
-        ),
-        blob=BlobInfo(url=blob.url, pathname=blob.pathname, size_bytes=blob.size),
+        book=uploaded_book,
+        blob=blob_info,
         structure=StructureDetail(
             **{"schema": schema.name.value},
             schema_confidence=schema.confidence,
@@ -345,3 +370,25 @@ async def upload_book(
             tokenizer=_tokenizer_info(encoder),
         ),
     )
+
+
+@router.get(
+    "/uploads",
+    response_model=list[UploadRecord],
+    summary="List stored uploads",
+)
+async def list_uploads(
+    limit: int = Query(100, ge=1, le=500, description="Max records to return"),
+    source: str | None = Query(
+        None, description="Filter by origin: gutenberg | upload", pattern="^(gutenberg|upload)$"
+    ),
+) -> list[UploadRecord]:
+    """
+    List the documents persisted in the `uploads` collection — one per book
+    uploaded or selected from search results, newest first. Each carries the
+    book metadata, the Vercel Blob link (uploads), and the current scan state
+    (scanned, scope, schema, total tokens). Requires MONGODB_URI to be set;
+    returns an empty list otherwise.
+    """
+    docs = await get_upload_store().list_uploads(limit=limit, source=source)
+    return [UploadRecord.model_validate(doc) for doc in docs]
