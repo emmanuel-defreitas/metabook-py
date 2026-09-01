@@ -164,6 +164,12 @@ make dev
 cd example && cargo run
 ```
 
+Or run both with one command (Ctrl-C stops both):
+
+```bash
+make serve
+```
+
 See [`example/README.md`](example/README.md) for the `Metabook.app` bundle (with app icon) and `METABOOK_API` configuration.
 
 ## 🌳 Branching and release

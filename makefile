@@ -3,6 +3,7 @@ path := .
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BIN                := ./bin
 DIST_DIR           ?= dist
+API_PORT           ?= 8001
 
 .PHONY: help
 help: ## Show this help message.
@@ -71,7 +72,27 @@ test: ## Run pytest.
 
 .PHONY: dev
 dev: ## Run the API locally with auto-reload.
-	@uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port 8000
+	@uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port $(API_PORT)
+
+.PHONY: serve
+serve: ## Run the API and the example GPUI client together (Ctrl-C stops both).
+	@uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port $(API_PORT) & \
+	api_pid=$$!; \
+	trap 'kill $$api_pid 2>/dev/null; pkill -P $$api_pid 2>/dev/null' EXIT INT TERM; \
+	i=0; \
+	until curl -sf http://127.0.0.1:$(API_PORT)/health >/dev/null 2>&1; do \
+	    if ! kill -0 $$api_pid 2>/dev/null; then \
+	        echo "serve: the API exited early — is port $(API_PORT) already in use?"; \
+	        exit 1; \
+	    fi; \
+	    i=$$((i+1)); \
+	    if [ $$i -ge 60 ]; then \
+	        echo "serve: the API did not become healthy within 30s"; \
+	        exit 1; \
+	    fi; \
+	    sleep 0.5; \
+	done; \
+	METABOOK_API=http://127.0.0.1:$(API_PORT) cargo run --manifest-path example/Cargo.toml
 
 .PHONY: docker-build
 docker-build: ## Build the Docker image.

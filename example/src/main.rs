@@ -8,9 +8,9 @@ mod app;
 
 use std::borrow::Cow;
 
-use gpui::{App, AppContext as _, AssetSource, Result, SharedString, WindowOptions, px, size};
-use gpui_component::{Root, TitleBar};
-use gpui_navigator::{Route, init_router, navigate};
+use gpui::{App, AppContext as _, AssetSource, Result, SharedString, TitlebarOptions, WindowOptions, point, px, size};
+use gpui_component::{Root, Theme, TitleBar};
+use gpui_navigator::{init_router, navigate, Route};
 
 use crate::app::MetabookApp;
 
@@ -40,11 +40,31 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
 
+            // Rounder controls app-wide: buttons, inputs, selects, and cards
+            // all read the theme radius, so one token bump rounds the whole
+            // system instead of per-call-site overrides. `radius` is the
+            // rounded-xl step (12px) and `radius_lg` keeps dialogs and
+            // notifications one step rounder. This survives light/dark
+            // switches because the default theme configs set no radius; the
+            // sync pushes the new radius down to Base-owned scrollbars.
+            {
+                let theme = Theme::global_mut(cx);
+                theme.radius = px(14.);
+                theme.radius_lg = px(18.);
+            }
+            Theme::sync_base(cx);
+
             cx.spawn(async move |cx| {
                 // No native title bar: the in-app TitleBar owns dragging,
                 // double-click zoom, and the traffic-light inset.
+                let title_bar_options = Option::Some(TitlebarOptions {
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(24.), px(24.))),
+                    title: None,
+                });
                 let options = WindowOptions {
                     window_min_size: Some(size(px(560.), px(440.))),
+                    titlebar: title_bar_options,
                     ..TitleBar::window_options()
                 };
                 cx.open_window(options, |window, cx| {

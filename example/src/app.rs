@@ -9,17 +9,17 @@
 //! overwrite a newer one.
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext as _, BorrowAppContext as _, ClipboardItem, Context, ElementId,
-    Entity, HighlightStyle,
-    InteractiveElement as _, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Window, div, px, radians, relative,
+    div, px, radians, relative, AnyElement, App, AppContext as _, BorrowAppContext as _,
+    ClipboardItem, Context, ElementId, Entity, HighlightStyle, InteractiveElement as _,
+    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Window,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{
@@ -31,13 +31,13 @@ use gpui_component::select::{Select, SelectState};
 use gpui_component::skeleton::Skeleton;
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::tree::{TreeEvent, TreeItem, TreeState, tree};
+use gpui_component::tree::{tree, TreeEvent, TreeItem, TreeState};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _, StyledExt as _,
-    Theme, ThemeMode, TitleBar, h_flex, v_flex,
+    h_flex, highlighter::LanguageRegistry, v_flex, ActiveTheme as _, Disableable as _, Icon,
+    IconName, Root, Sizable as _, StyledExt as _, Theme, ThemeMode, TitleBar,
 };
 use gpui_motion::{MotionExt as _, Spring, Tween};
-use gpui_navigator::{GlobalRouter, Transition as RouteTransition, router_view};
+use gpui_navigator::{router_view, GlobalRouter, Transition as RouteTransition};
 
 use crate::api::{self, BookMatch, NodeSpan, SearchOutcome, TreeNode};
 
@@ -65,9 +65,13 @@ const TOKENIZER_DEFAULT_IX: usize = 1;
 /// The workflow phase shown in the content region.
 enum Phase {
     Idle,
-    Processing { message: SharedString },
+    Processing {
+        message: SharedString,
+    },
     /// A search matched several books; the user picks one to analyse.
-    Matches { matches: Vec<BookMatch> },
+    Matches {
+        matches: Vec<BookMatch>,
+    },
     Done {
         title: SharedString,
         schema_json: SharedString,
@@ -87,7 +91,9 @@ enum Phase {
         editor_state: Option<Entity<EditorState>>,
         decorations: Option<gpui_component::input::TextDecorationCollection>,
     },
-    Failed { message: SharedString },
+    Failed {
+        message: SharedString,
+    },
 }
 
 /// The little bit of dynamic state the route pages need. Kept in its own
@@ -134,10 +140,10 @@ pub struct MetabookApp {
 impl MetabookApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // 127.0.0.1 rather than localhost: on hosts where another service
-        // (e.g. a container runtime) listens on *:8000, localhost can resolve
+        // (e.g. a container runtime) listens on *:8001, localhost can resolve
         // to ::1 and reach that service instead of the local API.
         let api_base = std::env::var("METABOOK_API")
-            .unwrap_or_else(|_| "http://127.0.0.1:8000".into())
+            .unwrap_or_else(|_| "http://127.0.0.1:8001".into())
             .trim_end_matches('/')
             .to_string();
 
@@ -166,7 +172,10 @@ impl MetabookApp {
             )
         });
 
-        let flags = cx.new(|_| FormFlags { processing: false, epub_name: None });
+        let flags = cx.new(|_| FormFlags {
+            processing: false,
+            epub_name: None,
+        });
 
         let subscriptions = vec![
             cx.subscribe_in(&query, window, Self::on_input_event),
@@ -331,14 +340,18 @@ impl MetabookApp {
     ) {
         self.request_ix += 1;
         let ix = self.request_ix;
-        self.phase = Phase::Processing { message: message.into() };
+        self.phase = Phase::Processing {
+            message: message.into(),
+        };
         self.set_flags(cx);
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_spawn(async move { work() }).await;
-            this.update_in(cx, |this, window, cx| this.finish_request(ix, result, window, cx))
-                .ok();
+            this.update_in(cx, |this, window, cx| {
+                this.finish_request(ix, result, window, cx)
+            })
+            .ok();
         })
         .detach();
     }
@@ -366,7 +379,8 @@ impl MetabookApp {
                 // whatever entry is selected after each change. Expansions
                 // emit events, which both materialise the newly revealed
                 // children and drive the row entrance animation.
-                cx.observe_in(&tree_state, window, Self::on_tree_changed).detach();
+                cx.observe_in(&tree_state, window, Self::on_tree_changed)
+                    .detach();
                 cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
                     this.on_tree_toggle(event, cx);
                 })
@@ -400,7 +414,9 @@ impl MetabookApp {
                 }
             }
             Ok(SearchOutcome::Matches(matches)) => Phase::Matches { matches },
-            Err(message) => Phase::Failed { message: message.into() },
+            Err(message) => Phase::Failed {
+                message: message.into(),
+            },
         };
         self.set_flags(cx);
         cx.notify();
@@ -416,7 +432,8 @@ impl MetabookApp {
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 if let Some(path) = paths.into_iter().next() {
-                    this.update(cx, |this, cx| this.set_epub_path(path, cx)).ok();
+                    this.update(cx, |this, cx| this.set_epub_path(path, cx))
+                        .ok();
                 }
             }
         })
@@ -424,7 +441,10 @@ impl MetabookApp {
     }
 
     fn set_epub_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("epub")) {
+        if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("epub"))
+        {
             self.epub_path = Some(path);
             if matches!(self.phase, Phase::Failed { .. }) {
                 self.phase = Phase::Idle;
@@ -446,7 +466,12 @@ impl MetabookApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Phase::Done { editor_state, decorations, .. } = &mut self.phase else {
+        let Phase::Done {
+            editor_state,
+            decorations,
+            ..
+        } = &mut self.phase
+        else {
             return;
         };
         if editor_state.is_some() {
@@ -471,7 +496,13 @@ impl MetabookApp {
     /// Materialise the children of a folder the first time it expands and
     /// keep the expansion set in sync.
     fn on_tree_toggle(&mut self, event: &TreeEvent, cx: &mut Context<Self>) {
-        let Phase::Done { tree, expanded, tree_state, .. } = &mut self.phase else {
+        let Phase::Done {
+            tree,
+            expanded,
+            tree_state,
+            ..
+        } = &mut self.phase
+        else {
             return;
         };
         let changed = match event {
@@ -495,7 +526,13 @@ impl MetabookApp {
 
     /// Collapse every folder in the tree at once.
     fn collapse_all(&mut self, cx: &mut Context<Self>) {
-        let Phase::Done { tree, expanded, tree_state, .. } = &mut self.phase else {
+        let Phase::Done {
+            tree,
+            expanded,
+            tree_state,
+            ..
+        } = &mut self.phase
+        else {
             return;
         };
         if expanded.is_empty() {
@@ -522,8 +559,13 @@ impl MetabookApp {
             .selected_entry()
             .map(|entry| entry.item().id.to_string());
         let highlight_bg = cx.theme().selection;
-        let Phase::Done { ranges, selected_node, editor_state, decorations, .. } =
-            &mut self.phase
+        let Phase::Done {
+            ranges,
+            selected_node,
+            editor_state,
+            decorations,
+            ..
+        } = &mut self.phase
         else {
             return;
         };
@@ -592,46 +634,41 @@ impl MetabookApp {
 
     // ── Regions ────────────────────────────────────────────────────────────────
 
-    /// Custom title bar: app identity on the left, API base and the theme
-    /// toggle on the right. Replaces the native macOS title bar.
+    /// Custom title bar: app identity on the left, the theme toggle on the
+    /// right. Replaces the native macOS title bar. Fully transparent with no
+    /// bottom border, so the window background reads as one surface with the
+    /// content below.
     fn render_title_bar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme_icon = if cx.theme().is_dark() {
             IconName::Sun
         } else {
             IconName::Moon
         };
-        TitleBar::new().child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .justify_between()
-                .pr_2()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .min_w_0()
-                        .child(div().text_sm().font_semibold().child("Metabook"))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child("Structural schema for any book"),
-                        ),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .flex_none()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(self.api_base.clone()),
-                        )
-                        .child(
+        TitleBar::new()
+            .bg(cx.theme().transparent)
+            .border_b_0()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .pr_2()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .min_w_0()
+                            .child(div().text_sm().font_semibold().child("Metabook"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .truncate()
+                                    .child("Structural schema for any book"),
+                            ),
+                    )
+                    .child(
+                        h_flex().gap_2().items_center().flex_none().child(
                             Button::new("toggle-theme")
                                 .ghost()
                                 .small()
@@ -643,8 +680,88 @@ impl MetabookApp {
                                     }),
                                 ),
                         ),
-                ),
-        )
+                    ),
+            )
+    }
+
+    /// The at-a-glance state for the status bar. The content region carries
+    /// the full message; this stays a short state word.
+    fn status_label(&self) -> SharedString {
+        match &self.phase {
+            Phase::Idle => "Ready".into(),
+            Phase::Processing { .. } => "Scanning…".into(),
+            Phase::Matches { .. } => "Select a match".into(),
+            Phase::Done { .. } => "Schema ready".into(),
+            Phase::Failed { .. } => "Failed".into(),
+        }
+    }
+
+    /// Bottom status band: which API instance the app talks to and the
+    /// workflow state on the leading side, the appearance mode and the JSON
+    /// highlighting engine on the trailing side.
+    ///
+    /// The band uses the `title_bar` chrome-surface token because the plain
+    /// `border` hairline is token-identical to the secondary window surface
+    /// in both themes — a distinct chrome band keeps the boundary readable
+    /// in light and dark alike.
+    fn render_status_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let failed = matches!(self.phase, Phase::Failed { .. });
+        // The JSON pane is highlighted through tree-sitter when the grammar
+        // is registered; without it the editor falls back to plain text.
+        let json_highlighted = LanguageRegistry::singleton().language("json").is_some();
+        let (json_icon, json_label) = if json_highlighted {
+            (IconName::CircleCheck, "JSON · tree-sitter")
+        } else {
+            (IconName::TriangleAlert, "JSON · plain text")
+        };
+        let theme_label: &str = if cx.theme().is_dark() {
+            "Dark"
+        } else {
+            "Light"
+        };
+
+        h_flex()
+            .id("status-bar")
+            .w_full()
+            .flex_none()
+            .h_7()
+            .items_center()
+            .justify_between()
+            .px_3()
+            .bg(cx.theme().title_bar)
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .min_w_0()
+                    .child(Icon::new(IconName::Globe).xsmall())
+                    .child(div().truncate().child(self.api_base.clone()))
+                    .child(div().child("·"))
+                    .child(
+                        div()
+                            .truncate()
+                            .when(failed, |el| el.text_color(cx.theme().danger))
+                            .child(self.status_label()),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .flex_none()
+                    .child(div().child(theme_label))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(Icon::new(json_icon).xsmall())
+                            .child(div().child(json_label)),
+                    ),
+            )
     }
 
     // ── Route pages ────────────────────────────────────────────────────────────
@@ -679,7 +796,8 @@ impl MetabookApp {
                     .on_click({
                         let app = handles.app.clone();
                         move |_, window, cx| {
-                            app.update(cx, |this, cx| this.start_search(window, cx)).ok();
+                            app.update(cx, |this, cx| this.start_search(window, cx))
+                                .ok();
                         }
                     }),
             )
@@ -729,7 +847,8 @@ impl MetabookApp {
                     .on_click({
                         let app = handles.app.clone();
                         move |_, window, cx| {
-                            app.update(cx, |this, cx| this.start_upload(window, cx)).ok();
+                            app.update(cx, |this, cx| this.start_upload(window, cx))
+                                .ok();
                         }
                     }),
             )
@@ -739,10 +858,19 @@ impl MetabookApp {
     fn render_content(&self, cx: &Context<Self>) -> impl IntoElement {
         let content = match &self.phase {
             Phase::Idle => self.render_idle(cx).into_any_element(),
-            Phase::Processing { message } => self.render_processing(message.clone(), cx).into_any_element(),
-            Phase::Matches { matches } => self.render_matches(matches.clone(), cx).into_any_element(),
+            Phase::Processing { message } => self
+                .render_processing(message.clone(), cx)
+                .into_any_element(),
+            Phase::Matches { matches } => {
+                self.render_matches(matches.clone(), cx).into_any_element()
+            }
             Phase::Failed { message } => self.render_failed(message.clone(), cx).into_any_element(),
-            Phase::Done { title, tree_state, editor_state, .. } => self
+            Phase::Done {
+                title,
+                tree_state,
+                editor_state,
+                ..
+            } => self
                 .render_result(title.clone(), tree_state.clone(), editor_state.clone(), cx)
                 .into_any_element(),
         };
@@ -853,38 +981,33 @@ impl MetabookApp {
                                             })),
                                     ),
                             )
-                            .on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    this.select_match(id, window, cx)
-                                }),
-                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.select_match(id, window, cx)
+                            }))
                     })),
             )
     }
 
     fn render_failed(&self, message: SharedString, cx: &Context<Self>) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .child(
-                v_flex()
-                    .gap_2()
-                    .max_w_96()
-                    .p_4()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .rounded(cx.theme().radius)
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .text_color(cx.theme().danger)
-                            .child(gpui_component::Icon::new(IconName::CircleX).small())
-                            .child(div().font_semibold().child("Request failed")),
-                    )
-                    .child(div().text_sm().child(message)),
-            )
+        v_flex().size_full().items_center().justify_center().child(
+            v_flex()
+                .gap_2()
+                .max_w_96()
+                .p_4()
+                .border_1()
+                .border_color(cx.theme().border)
+
+                .rounded(cx.theme().radius)
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .text_color(cx.theme().danger)
+                        .child(gpui_component::Icon::new(IconName::CircleX).small())
+                        .child(div().font_semibold().child("Request failed")),
+                )
+                .child(div().text_sm().child(message)),
+        )
     }
 
     fn render_result(
@@ -899,7 +1022,11 @@ impl MetabookApp {
         let copy_button = Button::new("copy-schema")
             .ghost()
             .small()
-            .icon(if copied { IconName::Check } else { IconName::Copy })
+            .icon(if copied {
+                IconName::Check
+            } else {
+                IconName::Copy
+            })
             .label(if copied { "Copied" } else { "Copy JSON" })
             .on_click(cx.listener(|this, _, _, cx| this.copy_schema(cx)));
         v_flex()
@@ -935,28 +1062,24 @@ impl MetabookApp {
                                 .child(self.render_structure_tree(tree_state, cx)),
                         )
                         .child(
-                            resizable_panel().child(
-                                div().size_full().pl_3().map(|pane| match &editor_state {
-                                    Some(state) => {
-                                        pane.child(Editor::new(state).h(relative(1.)))
-                                    }
+                            resizable_panel().child(div().size_full().pl_3().map(|pane| {
+                                match &editor_state {
+                                    Some(state) => pane.child(Editor::new(state).h(relative(1.))),
                                     // The editor is still initialising —
                                     // skeleton lines hold its place.
-                                    None => pane.child(
-                                        v_flex().gap_2().pt_2().children(
-                                            (0..14).map(|ix| {
-                                                let width = relative(match ix % 4 {
-                                                    0 => 0.55,
-                                                    1 => 0.85,
-                                                    2 => 0.7,
-                                                    _ => 0.4,
-                                                });
-                                                Skeleton::new().h_3().w(width)
-                                            }),
-                                        ),
-                                    ),
-                                }),
-                            ),
+                                    None => pane.child(v_flex().gap_2().pt_2().children(
+                                        (0..14).map(|ix| {
+                                            let width = relative(match ix % 4 {
+                                                0 => 0.55,
+                                                1 => 0.85,
+                                                2 => 0.7,
+                                                _ => 0.4,
+                                            });
+                                            Skeleton::new().h_3().w(width)
+                                        }),
+                                    )),
+                                }
+                            })),
                         ),
                 ),
             )
@@ -1040,11 +1163,9 @@ impl MetabookApp {
                     // Only rows revealed by the latest expansion animate in;
                     // everything else renders statically (scrolling never
                     // replays an entrance animation).
-                    let just_revealed = last_expanded
-                        .as_ref()
-                        .is_some_and(|parent| {
-                            id.starts_with(&format!("{parent}.")) && id.as_ref() != parent.as_ref()
-                        });
+                    let just_revealed = last_expanded.as_ref().is_some_and(|parent| {
+                        id.starts_with(&format!("{parent}.")) && id.as_ref() != parent.as_ref()
+                    });
 
                     let item = ListItem::new(ix)
                         .selected(selected)
@@ -1053,9 +1174,7 @@ impl MetabookApp {
                         item.child(
                             content
                                 .with_motion(
-                                    ElementId::Name(
-                                        format!("reveal-{expand_gen}-{id}").into(),
-                                    ),
+                                    ElementId::Name(format!("reveal-{expand_gen}-{id}").into()),
                                     1.0f32,
                                     Tween::new(0.18),
                                     |row, t: f32| row.opacity(t),
@@ -1075,7 +1194,10 @@ impl MetabookApp {
 /// placeholder child so they still render a disclosure chevron. Expanding a
 /// folder re-materialises with its real children (see `on_tree_toggle`).
 fn materialize_items(nodes: &[TreeNode], expanded: &HashSet<SharedString>) -> Vec<TreeItem> {
-    nodes.iter().map(|n| materialize_item(n, expanded)).collect()
+    nodes
+        .iter()
+        .map(|n| materialize_item(n, expanded))
+        .collect()
 }
 
 /// Joins a node's name and its counts inside the single label string a
@@ -1115,7 +1237,6 @@ impl Render for MetabookApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.render_title_bar(cx))
             .child(
@@ -1152,6 +1273,7 @@ impl Render for MetabookApp {
                     .child(div().w_full().child(router_view(window, cx)))
                     .child(self.render_content(cx)),
             )
+            .child(self.render_status_bar(cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

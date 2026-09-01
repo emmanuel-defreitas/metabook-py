@@ -20,7 +20,7 @@ make dev
 cd example && cargo run
 ```
 
-The app targets `http://127.0.0.1:8000` by default (explicit IPv4, so another service listening on `localhost`'s IPv6 side of port 8000 can't shadow the API); point it elsewhere with:
+The app targets `http://127.0.0.1:8001` by default (explicit IPv4, so another service listening on `localhost`'s IPv6 side of port 8001 can't shadow the API); point it elsewhere with:
 
 ```bash
 METABOOK_API=https://your-deployment.example cargo run
