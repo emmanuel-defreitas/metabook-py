@@ -48,6 +48,20 @@ const TAB_UPLOAD: usize = 1;
 const DETAIL_OPTIONS: [&str; 4] = ["Paragraphs", "Sentences", "Clauses", "Words"];
 const DETAIL_VALUES: [&str; 4] = ["paragraph", "sentence", "clause", "word"];
 
+/// Options for the tokenizer Select. Except for the first ("No tokens", which
+/// omits the API parameter), each label is the Hugging Face repository name
+/// sent as the `tokenizer` query parameter verbatim.
+const TOKENIZER_OPTIONS: [&str; 6] = [
+    "No tokens",
+    "bert-base-uncased",
+    "gpt2",
+    "roberta-base",
+    "distilbert-base-uncased",
+    "xlm-roberta-base",
+];
+/// Default Select index into `TOKENIZER_OPTIONS`: `bert-base-uncased`.
+const TOKENIZER_DEFAULT_IX: usize = 1;
+
 /// The workflow phase shown in the content region.
 enum Phase {
     Idle,
@@ -90,7 +104,7 @@ pub struct FormHandles {
     pub app: gpui::WeakEntity<MetabookApp>,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
-    tokenizer: Entity<InputState>,
+    tokenizer: Entity<SelectState<Vec<&'static str>>>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     flags: Entity<FormFlags>,
 }
@@ -100,7 +114,7 @@ pub struct MetabookApp {
     tab_ix: usize,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
-    tokenizer: Entity<InputState>,
+    tokenizer: Entity<SelectState<Vec<&'static str>>>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     flags: Entity<FormFlags>,
     epub_path: Option<PathBuf>,
@@ -131,10 +145,15 @@ impl MetabookApp {
             InputState::new(window, cx).placeholder("Title or author, e.g. Pride and Prejudice")
         });
         let isbn = cx.new(|cx| InputState::new(window, cx).placeholder("ISBN-10 or ISBN-13"));
-        // Optional token counting: a Hugging Face tokenizer repository name.
-        // Left empty, the request omits the parameter and no tokens appear.
+        // Optional token counting: a known Hugging Face tokenizer, defaulting
+        // to bert-base-uncased. "No tokens" omits the parameter entirely.
         let tokenizer = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Tokenizer (optional), e.g. bert-base-uncased")
+            SelectState::new(
+                TOKENIZER_OPTIONS.to_vec(),
+                Some(gpui_component::IndexPath::new(TOKENIZER_DEFAULT_IX)),
+                window,
+                cx,
+            )
         });
         // Default to sentence detail so the deeper nesting is visible without
         // requesting word-level nodes for every large book up front.
@@ -152,7 +171,6 @@ impl MetabookApp {
         let subscriptions = vec![
             cx.subscribe_in(&query, window, Self::on_input_event),
             cx.subscribe_in(&isbn, window, Self::on_input_event),
-            cx.subscribe_in(&tokenizer, window, Self::on_input_event),
         ];
 
         Self {
@@ -232,7 +250,12 @@ impl MetabookApp {
 
     /// The API `tokenizer` value; empty means "don't count tokens".
     fn tokenizer_value(&self, cx: &Context<Self>) -> String {
-        self.tokenizer.read(cx).value().trim().to_string()
+        self.tokenizer
+            .read(cx)
+            .selected_value()
+            .filter(|label| **label != TOKENIZER_OPTIONS[0])
+            .map(|label| label.to_string())
+            .unwrap_or_default()
     }
 
     // ── Commands ───────────────────────────────────────────────────────────────
@@ -647,7 +670,7 @@ impl MetabookApp {
             .items_center()
             .child(div().flex_1().child(Input::new(&query)))
             .child(div().w(px(176.)).child(Input::new(&isbn)))
-            .child(div().w_56().child(Input::new(&tokenizer)))
+            .child(div().w_56().child(Select::new(&tokenizer)))
             .child(div().w(px(144.)).child(Select::new(&detail)))
             .child(
                 Button::new("search")
@@ -697,7 +720,7 @@ impl MetabookApp {
                     .text_color(cx.theme().muted_foreground)
                     .child(chosen),
             )
-            .child(div().w_56().child(Input::new(&handles.tokenizer)))
+            .child(div().w_56().child(Select::new(&handles.tokenizer)))
             .child(div().w(px(144.)).child(Select::new(&handles.detail)))
             .child(
                 Button::new("analyze")
