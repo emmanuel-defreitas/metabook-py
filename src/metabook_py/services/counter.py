@@ -14,6 +14,12 @@ Counting rules
 - Sentence   : split on [.!?]['"»]? followed by whitespace + uppercase,
                with protection for common abbreviations.
 - Word       : any token matching \b[a-zA-Z0-9]+\b.
+- Token      : delegated to an optional *encoder* callable (text → count).
+               This module never loads a tokenizer itself — callers inject
+               one (see services/tokenizers.py) — so it stays dependency-free
+               and offline-testable. Token counts are computed on the same
+               text spans as word counts, and parent totals are sums of their
+               children, so the numbers are additive up the tree.
 """
 
 from __future__ import annotations
@@ -44,6 +50,9 @@ from metabook_py.services.detector import (
 # Detail levels for the depth of leaf nesting, shallow → deep.
 DETAIL_LEVELS = ("paragraph", "sentence", "clause", "word")
 
+# An encoder maps a text span → its token count (special tokens excluded).
+Encoder = Callable[[str], int]
+
 # ── Sentence-splitting ─────────────────────────────────────────────────────────
 
 _ABBREVS = re.compile(
@@ -73,6 +82,15 @@ def _count_words(text: str) -> int:
     return len(re.findall(r"\b[a-zA-Z0-9]+\b", text))
 
 
+def _sum_tokens(nodes: list) -> int:
+    """Parent token totals are sums of their children, keeping counts additive
+    up the tree. Accepts leaf nodes (token_count) and container nodes
+    (total_tokens) alike."""
+    return sum(
+        getattr(n, "token_count", None) or getattr(n, "total_tokens", None) or 0 for n in nodes
+    )
+
+
 def _split_paragraphs(text: str) -> list[str]:
     """Return non-trivial paragraphs (at least 3 chars — filters blank lines and stray punctuation)."""
     return [p.strip() for p in re.split(r"\n\s*\n", text) if len(p.strip()) >= 3]
@@ -88,34 +106,42 @@ def _word_nodes(text: str) -> list[WordNode]:
     return [WordNode(index=i + 1) for i in range(_count_words(text))]
 
 
-def _clause_nodes(sentence: str, *, detail: str) -> list[ClauseNode]:
+def _clause_nodes(
+    sentence: str, *, detail: str, encoder: Encoder | None = None
+) -> list[ClauseNode]:
     clauses = [c.strip() for c in _CLAUSE_BOUNDARY.split(sentence) if c.strip()]
     return [
         ClauseNode(
             index=i + 1,
             word_count=_count_words(c),
+            token_count=encoder(c) if encoder else None,
             words=_word_nodes(c) if detail == "word" else None,
         )
         for i, c in enumerate(clauses)
     ]
 
 
-def _sentence_nodes(sentences: list[str], *, detail: str) -> list[SentenceNode]:
+def _sentence_nodes(
+    sentences: list[str], *, detail: str, encoder: Encoder | None = None
+) -> list[SentenceNode]:
     nodes = []
     for i, s in enumerate(sentences):
-        clauses = _clause_nodes(s, detail=detail)
+        clauses = _clause_nodes(s, detail=detail, encoder=encoder)
         nodes.append(
             SentenceNode(
                 index=i + 1,
                 clause_count=max(1, len(clauses)),
                 word_count=_count_words(s),
+                token_count=encoder(s) if encoder else None,
                 clauses=clauses if detail in ("clause", "word") else None,
             )
         )
     return nodes
 
 
-def _para_node(text: str, index: int, *, detail: str = "paragraph") -> ParagraphNode:
+def _para_node(
+    text: str, index: int, *, detail: str = "paragraph", encoder: Encoder | None = None
+) -> ParagraphNode:
     sentences = _split_sentences(text)
     sc = max(1, len(sentences))
     wc = _count_words(text)
@@ -123,8 +149,13 @@ def _para_node(text: str, index: int, *, detail: str = "paragraph") -> Paragraph
         index=index,
         sentence_count=sc,
         word_count=wc,
+        token_count=encoder(text) if encoder else None,
         avg_words_per_sentence=round(wc / sc, 2),
-        sentences=_sentence_nodes(sentences, detail=detail) if detail != "paragraph" else None,
+        sentences=(
+            _sentence_nodes(sentences, detail=detail, encoder=encoder)
+            if detail != "paragraph"
+            else None
+        ),
     )
 
 
@@ -136,9 +167,10 @@ def _chapter_node(
     *,
     include_paragraphs: bool,
     detail: str = "paragraph",
+    encoder: Encoder | None = None,
 ) -> ChapterNode:
     paras = _split_paragraphs(text)
-    para_nodes = [_para_node(p, i + 1, detail=detail) for i, p in enumerate(paras)]
+    para_nodes = [_para_node(p, i + 1, detail=detail, encoder=encoder) for i, p in enumerate(paras)]
 
     if not para_nodes:
         return ChapterNode(
@@ -150,6 +182,7 @@ def _chapter_node(
             avg_words_per_sentence=0.0,
             total_words=0,
             total_sentences=0,
+            total_tokens=0 if encoder else None,
             paragraphs=[] if include_paragraphs else None,
         )
 
@@ -166,6 +199,7 @@ def _chapter_node(
         avg_words_per_sentence=round(total_w / max(total_s, 1), 2),
         total_words=total_w,
         total_sentences=total_s,
+        total_tokens=_sum_tokens(para_nodes) if encoder else None,
         paragraphs=para_nodes if include_paragraphs else None,
     )
 
@@ -197,9 +231,16 @@ def _split_on(text: str, pattern: re.Pattern) -> list[tuple[str, str]]:
 
 
 def _build_flat(
-    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
+    text: str,
+    *,
+    include_paragraphs: bool,
+    detail: str = "paragraph",
+    encoder: Encoder | None = None,
 ) -> tuple[list[ParagraphNode], StructureSummary]:
-    nodes = [_para_node(p, i + 1, detail=detail) for i, p in enumerate(_split_paragraphs(text))]
+    nodes = [
+        _para_node(p, i + 1, detail=detail, encoder=encoder)
+        for i, p in enumerate(_split_paragraphs(text))
+    ]
     total_s = sum(p.sentence_count for p in nodes)
     total_w = sum(p.word_count for p in nodes)
     pc = len(nodes)
@@ -208,6 +249,7 @@ def _build_flat(
         total_paragraphs=pc,
         total_sentences=total_s,
         total_words=total_w,
+        total_tokens=_sum_tokens(nodes) if encoder else None,
         avg_paragraphs_per_chapter=1.0,
         avg_sentences_per_paragraph=round(total_s / max(pc, 1), 2),
         avg_words_per_sentence=round(total_w / max(total_s, 1), 2),
@@ -217,12 +259,19 @@ def _build_flat(
 
 
 def _build_standard_book(
-    text: str, schema: DetectedSchema, *, include_paragraphs: bool, detail: str = "paragraph"
+    text: str,
+    schema: DetectedSchema,
+    *,
+    include_paragraphs: bool,
+    detail: str = "paragraph",
+    encoder: Encoder | None = None,
 ) -> tuple[list[ChapterNode], StructureSummary]:
     # Prefer explicit "Chapter N" wording; fall back to standalone numerals
     splits = _split_on(text, CHAPTER_WORD_RE) or _split_on(text, CHAPTER_NUM_RE)
     if not splits:
-        nodes, summary = _build_flat(text, include_paragraphs=include_paragraphs, detail=detail)
+        nodes, summary = _build_flat(
+            text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
+        )
         return nodes, summary  # type: ignore[return-value]
 
     chapters = [
@@ -233,14 +282,19 @@ def _build_standard_book(
             "chapter",
             include_paragraphs=include_paragraphs,
             detail=detail,
+            encoder=encoder,
         )
         for i, (label, content) in enumerate(splits)
     ]
-    return _chapters_summary(chapters)
+    return _chapters_summary(chapters, with_tokens=encoder is not None)
 
 
 def _build_sectioned_book(
-    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
+    text: str,
+    *,
+    include_paragraphs: bool,
+    detail: str = "paragraph",
+    encoder: Encoder | None = None,
 ) -> tuple[list[PartNode], StructureSummary]:
     part_splits = _split_on(text, PART_RE)
     if not part_splits:
@@ -249,6 +303,7 @@ def _build_sectioned_book(
             DetectedSchema(SchemaType.SECTIONED_BOOK, "low", 0),
             include_paragraphs=include_paragraphs,
             detail=detail,
+            encoder=encoder,
         )
         return chapters, summary  # type: ignore[return-value]
 
@@ -268,6 +323,7 @@ def _build_sectioned_book(
                 "chapter",
                 include_paragraphs=include_paragraphs,
                 detail=detail,
+                encoder=encoder,
             )
             for ci, (label, content) in enumerate(ch_splits)
         ]
@@ -281,19 +337,26 @@ def _build_sectioned_book(
                 child_count=len(chapters),
                 total_paragraphs=total_pp,
                 total_words=total_ww,
+                total_tokens=_sum_tokens(chapters) if encoder else None,
                 children=chapters,
             )
         )
 
-    return _parts_summary(parts)
+    return _parts_summary(parts, with_tokens=encoder is not None)
 
 
 def _build_essay_collection(
-    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
+    text: str,
+    *,
+    include_paragraphs: bool,
+    detail: str = "paragraph",
+    encoder: Encoder | None = None,
 ) -> tuple[list[ChapterNode], StructureSummary]:
     splits = _split_on(text, CAPS_TITLE_RE)
     if not splits:
-        nodes, summary = _build_flat(text, include_paragraphs=include_paragraphs, detail=detail)
+        nodes, summary = _build_flat(
+            text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
+        )
         return nodes, summary  # type: ignore[return-value]
 
     essays = [
@@ -304,10 +367,11 @@ def _build_essay_collection(
             "essay",
             include_paragraphs=include_paragraphs,
             detail=detail,
+            encoder=encoder,
         )
         for i, (label, content) in enumerate(splits)
     ]
-    return _chapters_summary(essays)
+    return _chapters_summary(essays, with_tokens=encoder is not None)
 
 
 # Verse marker with its chapter:verse numbers captured, e.g. "3:14 ". Some
@@ -337,7 +401,11 @@ def _verse_number_chapters(content: str) -> list[tuple[int, list[tuple[int, str]
 
 
 def _build_scripture(
-    text: str, *, include_paragraphs: bool, detail: str = "paragraph"
+    text: str,
+    *,
+    include_paragraphs: bool,
+    detail: str = "paragraph",
+    encoder: Encoder | None = None,
 ) -> tuple[list[PartNode], StructureSummary]:
     """
     For scripture each 'paragraph' is a verse (identified by "N:N " patterns).
@@ -347,7 +415,9 @@ def _build_scripture(
     # Drop headings with no verses under them (testament banners, front matter).
     book_splits = [s for s in book_splits if VERSE_RE.search(s[1])]
     if not book_splits:
-        return _build_sectioned_book(text, include_paragraphs=include_paragraphs, detail=detail)
+        return _build_sectioned_book(
+            text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
+        )
 
     books: list[PartNode] = []
     for bi, (book_label, book_content) in enumerate(book_splits):
@@ -358,10 +428,10 @@ def _build_scripture(
             numbered = _verse_number_chapters(book_content)
             if numbered:
                 verse_chapters = [
-                    _verse_chapter_node(chapter_no, verses, include_paragraphs, detail)
+                    _verse_chapter_node(chapter_no, verses, include_paragraphs, detail, encoder)
                     for chapter_no, verses in numbered
                 ]
-                books.append(_book_node(bi + 1, book_label, verse_chapters))
+                books.append(_book_node(bi + 1, book_label, verse_chapters, encoder))
                 continue
             ch_splits = [("", book_content)]
 
@@ -372,7 +442,10 @@ def _build_scripture(
                 v.strip() for v in VERSE_RE.split(ch_content) if len(v.strip()) >= 3
             ] or _split_paragraphs(ch_content)
 
-            verse_nodes = [_para_node(v, vi + 1, detail=detail) for vi, v in enumerate(verse_texts)]
+            verse_nodes = [
+                _para_node(v, vi + 1, detail=detail, encoder=encoder)
+                for vi, v in enumerate(verse_texts)
+            ]
             total_s = sum(v.sentence_count for v in verse_nodes)
             total_w = sum(v.word_count for v in verse_nodes)
             vc = len(verse_nodes)
@@ -386,13 +459,14 @@ def _build_scripture(
                     avg_words_per_sentence=round(total_w / max(total_s, 1), 2),
                     total_words=total_w,
                     total_sentences=total_s,
+                    total_tokens=_sum_tokens(verse_nodes) if encoder else None,
                     paragraphs=verse_nodes if include_paragraphs else None,
                 )
             )
 
-        books.append(_book_node(bi + 1, book_label, chapters))
+        books.append(_book_node(bi + 1, book_label, chapters, encoder))
 
-    return _parts_summary(books)
+    return _parts_summary(books, with_tokens=encoder is not None)
 
 
 def _verse_chapter_node(
@@ -400,8 +474,11 @@ def _verse_chapter_node(
     verses: list[tuple[int, str]],
     include_paragraphs: bool,
     detail: str,
+    encoder: Encoder | None = None,
 ) -> ChapterNode:
-    verse_nodes = [_para_node(v_text, v_no, detail=detail) for v_no, v_text in verses]
+    verse_nodes = [
+        _para_node(v_text, v_no, detail=detail, encoder=encoder) for v_no, v_text in verses
+    ]
     total_s = sum(v.sentence_count for v in verse_nodes)
     total_w = sum(v.word_count for v in verse_nodes)
     vc = len(verse_nodes)
@@ -414,11 +491,14 @@ def _verse_chapter_node(
         avg_words_per_sentence=round(total_w / max(total_s, 1), 2),
         total_words=total_w,
         total_sentences=total_s,
+        total_tokens=_sum_tokens(verse_nodes) if encoder else None,
         paragraphs=verse_nodes if include_paragraphs else None,
     )
 
 
-def _book_node(index: int, label: str, chapters: list[ChapterNode]) -> PartNode:
+def _book_node(
+    index: int, label: str, chapters: list[ChapterNode], encoder: Encoder | None = None
+) -> PartNode:
     return PartNode(
         level="book",
         index=index,
@@ -426,6 +506,7 @@ def _book_node(index: int, label: str, chapters: list[ChapterNode]) -> PartNode:
         child_count=len(chapters),
         total_paragraphs=sum(c.paragraph_count for c in chapters),
         total_words=sum(c.total_words for c in chapters),
+        total_tokens=_sum_tokens(chapters) if encoder else None,
         children=chapters,
     )
 
@@ -435,6 +516,8 @@ def _book_node(index: int, label: str, chapters: list[ChapterNode]) -> PartNode:
 
 def _chapters_summary(
     chapters: list[ChapterNode],
+    *,
+    with_tokens: bool = False,
 ) -> tuple[list[ChapterNode], StructureSummary]:
     total_p = sum(c.paragraph_count for c in chapters)
     total_s = sum(c.total_sentences for c in chapters)
@@ -445,6 +528,7 @@ def _chapters_summary(
         total_paragraphs=total_p,
         total_sentences=total_s,
         total_words=total_w,
+        total_tokens=_sum_tokens(chapters) if with_tokens else None,
         avg_paragraphs_per_chapter=round(total_p / max(nc, 1), 2),
         avg_sentences_per_paragraph=round(total_s / max(total_p, 1), 2),
         avg_words_per_sentence=round(total_w / max(total_s, 1), 2),
@@ -454,6 +538,8 @@ def _chapters_summary(
 
 def _parts_summary(
     parts: list[PartNode],
+    *,
+    with_tokens: bool = False,
 ) -> tuple[list[PartNode], StructureSummary]:
     total_chapters = sum(p.child_count for p in parts)
     total_p = sum(p.total_paragraphs for p in parts)
@@ -466,6 +552,7 @@ def _parts_summary(
         total_paragraphs=total_p,
         total_sentences=total_s,
         total_words=total_w,
+        total_tokens=_sum_tokens(parts) if with_tokens else None,
         avg_paragraphs_per_chapter=round(total_p / max(total_chapters, 1), 2),
         avg_sentences_per_paragraph=round(total_s / max(total_p, 1), 2),
         avg_words_per_sentence=round(total_w / max(total_s, 1), 2),
@@ -482,6 +569,7 @@ def build_structure_tree(
     *,
     include_paragraphs: bool = True,
     detail: str = "paragraph",
+    encoder: Encoder | None = None,
 ) -> tuple[list, StructureSummary]:
     """
     Build and return (nodes, summary) for *text* according to *schema*.
@@ -490,22 +578,27 @@ def build_structure_tree(
     *detail* controls leaf nesting depth (see DETAIL_LEVELS): paragraphs may
     contain sentences, sentences clauses, and clauses words. Deeper levels
     still carry only positions and counts (a word node is index + length).
+
+    *encoder*, when given, is a callable mapping a text span → its token
+    count; every node then carries a token count alongside its word count,
+    and parent totals are sums of their children. When None (the default),
+    no token counts are computed and the output is unchanged.
     """
     dispatch: dict[SchemaType, Callable[[], tuple[list, StructureSummary]]] = {
         SchemaType.CANONICAL_SCRIPTURE: lambda: _build_scripture(
-            text, include_paragraphs=include_paragraphs, detail=detail
+            text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
         ),
         SchemaType.SECTIONED_BOOK: lambda: _build_sectioned_book(
-            text, include_paragraphs=include_paragraphs, detail=detail
+            text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
         ),
         SchemaType.STANDARD_BOOK: lambda: _build_standard_book(
-            text, schema, include_paragraphs=include_paragraphs, detail=detail
+            text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
         ),
         SchemaType.ESSAY_COLLECTION: lambda: _build_essay_collection(
-            text, include_paragraphs=include_paragraphs, detail=detail
+            text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
         ),
         SchemaType.FLAT: lambda: _build_flat(
-            text, include_paragraphs=include_paragraphs, detail=detail
+            text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
         ),
     }
     builder = dispatch.get(schema.name, dispatch[SchemaType.FLAT])

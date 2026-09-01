@@ -54,6 +54,22 @@ The `detail` parameter controls how deep the returned tree nests beneath each pa
 | `clause` | + clause nodes |
 | `word` | + word nodes (index + position only) |
 
+### Token counts
+
+Pass an optional `tokenizer` query parameter naming a Hugging Face tokenizer
+repository (e.g. `bert-base-uncased`) and every node in the tree carries a
+token count alongside its word count — special tokens excluded, so parent
+totals equal the sum of their children. The response metadata echoes the
+resolved tokenizer name and its vocabulary size. The tokenizer is fetched
+lazily on first use (cached on disk and in memory afterwards); an unknown
+name returns `422`, a transient fetch failure on cold start returns `503`.
+When the parameter is omitted, no token counts are computed and the response
+is unchanged.
+
+```bash
+curl "http://127.0.0.1:8000/api/books/structure?title=Pride+and+Prejudice&tokenizer=bert-base-uncased"
+```
+
 ## 🚀 Quick start
 
 ```bash
@@ -83,7 +99,7 @@ If the project is linked to Vercel, `vercel env pull` writes the token to `.env.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/api/books/structure` | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`) |
+| `GET` | `/api/books/structure` | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`, `tokenizer`) |
 | `GET` | `/api/books/structure/schemas` | List the supported structural schemas |
 | `POST` | `/api/books/upload` | Upload an EPUB and analyse it |
 | `GET` | `/health` | Liveness + cache stats |

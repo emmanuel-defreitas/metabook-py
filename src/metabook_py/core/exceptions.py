@@ -48,6 +48,26 @@ class BlobUploadError(Exception):
         super().__init__(f"Blob upload failed: {reason}")
 
 
+class TokenizerNotFoundError(Exception):
+    """Raised when a tokenizer name does not resolve to a usable Hugging Face
+    tokenizer (unknown repository, gated repository, or no tokenizer file)."""
+
+    def __init__(self, name: str, reason: str):
+        self.name = name
+        self.reason = reason
+        super().__init__(f"Tokenizer '{name}' not found: {reason}")
+
+
+class TokenizerUnavailableError(Exception):
+    """Raised when a tokenizer exists (or may exist) but could not be fetched —
+    a transient network or Hub failure on cold start, not a bad request."""
+
+    def __init__(self, name: str, reason: str):
+        self.name = name
+        self.reason = reason
+        super().__init__(f"Tokenizer '{name}' unavailable: {reason}")
+
+
 class UnsupportedFormatError(Exception):
     """Raised when no text or HTML format is present in the Gutendex formats dict."""
 
