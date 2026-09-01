@@ -111,8 +111,8 @@ BUMP               ?= minor
 
 # Line-count thresholds for promote: insertions+deletions of next...dev.
 # < CHURN_MINOR → patch (0.0.+1); < CHURN_MAJOR → minor (0.+1.0); else major.
-CHURN_MINOR        ?= 100
-CHURN_MAJOR        ?= 1000
+CHURN_MINOR        ?= 500
+CHURN_MAJOR        ?= 10000
 
 # Commit range for `release-notes`.
 RANGE              ?= origin/$(TRUNK)..HEAD
