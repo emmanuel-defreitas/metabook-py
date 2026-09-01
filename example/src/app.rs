@@ -90,6 +90,7 @@ pub struct FormHandles {
     pub app: gpui::WeakEntity<MetabookApp>,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
+    tokenizer: Entity<InputState>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     flags: Entity<FormFlags>,
 }
@@ -99,6 +100,7 @@ pub struct MetabookApp {
     tab_ix: usize,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
+    tokenizer: Entity<InputState>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     flags: Entity<FormFlags>,
     epub_path: Option<PathBuf>,
@@ -129,6 +131,11 @@ impl MetabookApp {
             InputState::new(window, cx).placeholder("Title or author, e.g. Pride and Prejudice")
         });
         let isbn = cx.new(|cx| InputState::new(window, cx).placeholder("ISBN-10 or ISBN-13"));
+        // Optional token counting: a Hugging Face tokenizer repository name.
+        // Left empty, the request omits the parameter and no tokens appear.
+        let tokenizer = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Tokenizer (optional), e.g. bert-base-uncased")
+        });
         // Default to sentence detail so the deeper nesting is visible without
         // requesting word-level nodes for every large book up front.
         let detail = cx.new(|cx| {
@@ -145,6 +152,7 @@ impl MetabookApp {
         let subscriptions = vec![
             cx.subscribe_in(&query, window, Self::on_input_event),
             cx.subscribe_in(&isbn, window, Self::on_input_event),
+            cx.subscribe_in(&tokenizer, window, Self::on_input_event),
         ];
 
         Self {
@@ -152,6 +160,7 @@ impl MetabookApp {
             tab_ix: TAB_SEARCH,
             query,
             isbn,
+            tokenizer,
             detail,
             flags,
             epub_path: None,
@@ -182,6 +191,7 @@ impl MetabookApp {
             app: cx.entity().downgrade(),
             query: self.query.clone(),
             isbn: self.isbn.clone(),
+            tokenizer: self.tokenizer.clone(),
             detail: self.detail.clone(),
             flags: self.flags.clone(),
         }
@@ -220,6 +230,11 @@ impl MetabookApp {
             .to_string()
     }
 
+    /// The API `tokenizer` value; empty means "don't count tokens".
+    fn tokenizer_value(&self, cx: &Context<Self>) -> String {
+        self.tokenizer.read(cx).value().trim().to_string()
+    }
+
     // ── Commands ───────────────────────────────────────────────────────────────
 
     fn start_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -238,9 +253,10 @@ impl MetabookApp {
 
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
+        let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
             "Searching Gutendex…",
-            move || api::search(&base, &query, &isbn, &detail),
+            move || api::search(&base, &query, &isbn, &detail, &tokenizer),
             window,
             cx,
         );
@@ -252,9 +268,13 @@ impl MetabookApp {
         }
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
+        let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
             "Fetching and scanning the book text…",
-            move || api::fetch_by_id(&base, gutenberg_id, &detail).map(SearchOutcome::Analysis),
+            move || {
+                api::fetch_by_id(&base, gutenberg_id, &detail, &tokenizer)
+                    .map(SearchOutcome::Analysis)
+            },
             window,
             cx,
         );
@@ -270,9 +290,10 @@ impl MetabookApp {
 
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
+        let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
             "Uploading and scanning the EPUB…",
-            move || api::upload(&base, &path, &detail).map(SearchOutcome::Analysis),
+            move || api::upload(&base, &path, &detail, &tokenizer).map(SearchOutcome::Analysis),
             window,
             cx,
         );
@@ -615,17 +636,19 @@ impl MetabookApp {
 
     pub(crate) fn search_form(handles: &FormHandles, cx: &mut App) -> AnyElement {
         let processing = handles.flags.read(cx).processing;
-        let (query, isbn, detail) = (
+        let (query, isbn, tokenizer, detail) = (
             handles.query.clone(),
             handles.isbn.clone(),
+            handles.tokenizer.clone(),
             handles.detail.clone(),
         );
         h_flex()
             .gap_2()
             .items_center()
             .child(div().flex_1().child(Input::new(&query)))
-            .child(div().w_48().child(Input::new(&isbn)))
-            .child(div().w_40().child(Select::new(&detail)))
+            .child(div().w_44().child(Input::new(&isbn)))
+            .child(div().w_56().child(Input::new(&tokenizer)))
+            .child(div().w_36().child(Select::new(&detail)))
             .child(
                 Button::new("search")
                     .primary()
@@ -674,7 +697,8 @@ impl MetabookApp {
                     .text_color(cx.theme().muted_foreground)
                     .child(chosen),
             )
-            .child(div().w_40().child(Select::new(&handles.detail)))
+            .child(div().w_56().child(Input::new(&handles.tokenizer)))
+            .child(div().w_36().child(Select::new(&handles.detail)))
             .child(
                 Button::new("analyze")
                     .primary()

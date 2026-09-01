@@ -4,6 +4,7 @@ A small [GPUI](https://www.gpui.rs) / [gpui-component](https://github.com/longbr
 
 - **Search** — title/author (fuzzy, via Gutendex) or ISBN
 - **Upload EPUB** — native file picker, posts to `/api/books/upload`
+- **Tokens (optional)** — name a Hugging Face tokenizer (e.g. `bert-base-uncased`) in either form and every node in the tree shows a token count alongside its word count; leave it empty and no tokens are requested
 
 Both paths show a processing view while the API fetches and scans the document, then present the returned structural schema as code (selectable, copyable JSON).
 
