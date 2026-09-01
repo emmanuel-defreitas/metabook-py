@@ -21,6 +21,8 @@ from metabook_py.core.exceptions import (
     GutendexUnavailableError,
     InvalidEpubError,
     TextUnavailableError,
+    TokenizerNotFoundError,
+    TokenizerUnavailableError,
 )
 from metabook_py.models.book import (
     AuthorInfo,
@@ -34,6 +36,7 @@ from metabook_py.models.structure import (
     BookUploadResponse,
     MetaInfo,
     StructureDetail,
+    TokenizerInfo,
     UploadMetaInfo,
 )
 from metabook_py.services.blob import upload_epub
@@ -42,6 +45,7 @@ from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
+from metabook_py.services.tokenizers import TokenEncoder, get_encoder
 
 router = APIRouter(prefix="/books", tags=["books"])
 
@@ -67,6 +71,53 @@ def _validate_detail(detail: str) -> None:
         )
 
 
+def _resolve_encoder(tokenizer: str | None) -> TokenEncoder | None:
+    """Resolve the optional ?tokenizer= name into an encoder, mapping resolver
+    errors onto HTTP semantics: a bad name is the client's fault (422), a
+    fetch failure on cold start is transient (503)."""
+    if tokenizer is None:
+        return None
+    try:
+        return get_encoder(tokenizer)
+    except TokenizerNotFoundError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "tokenizer_not_found",
+                "tokenizer": exc.name,
+                "message": exc.reason,
+            },
+        ) from exc
+    except TokenizerUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "tokenizer_unavailable",
+                "tokenizer": exc.name,
+                "message": exc.reason,
+            },
+        ) from exc
+
+
+def _tokenizer_info(encoder: TokenEncoder | None) -> TokenizerInfo | None:
+    """Echo the resolved tokenizer in the metadata block — a token count is
+    never reported without the scheme that produced it."""
+    if encoder is None:
+        return None
+    return TokenizerInfo(name=encoder.name, vocab_size=encoder.vocab_size)
+
+
+_TOKENIZER_QUERY = Query(
+    None,
+    description=(
+        "Hugging Face tokenizer repository (e.g. bert-base-uncased). When given, "
+        "token counts are included alongside word counts at every level of the "
+        "structure tree, and the metadata echoes the tokenizer name and vocabulary "
+        "size. When omitted, no token counts are computed."
+    ),
+)
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
@@ -86,8 +137,9 @@ async def list_schemas() -> list[SchemaInfo]:
     responses={
         300: {"description": "Multiple books found — disambiguate with gutenberg_id"},
         404: {"description": "No book matched the query"},
-        422: {"description": "Book found but its text could not be retrieved"},
+        422: {"description": "Text could not be retrieved, or unknown tokenizer"},
         502: {"description": "Gutendex API is unreachable"},
+        503: {"description": "Tokenizer could not be fetched (transient failure)"},
         504: {"description": "Gutendex API timed out"},
     },
     summary="Analyse book structure",
@@ -105,11 +157,13 @@ async def get_book_structure(
         "paragraph",
         description="Leaf nesting depth: paragraph | sentence | clause | word",
     ),
+    tokenizer: str | None = _TOKENIZER_QUERY,
 ) -> BookStructureResponse:
     """
     Locate a book on Project Gutenberg via the Gutendex API, download and
     parse its full text, and return a structural metadata tree — paragraph
-    counts, sentence counts, and word counts per node.
+    counts, sentence counts, and word counts per node (plus token counts
+    when a `tokenizer` is given).
 
     **No actual text content is included in the response.**
 
@@ -121,6 +175,7 @@ async def get_book_structure(
             detail="At least one of 'title', 'isbn', or 'gutenberg_id' is required.",
         )
     _validate_detail(detail)
+    encoder = _resolve_encoder(tokenizer)
 
     t0 = time.monotonic()
 
@@ -167,7 +222,7 @@ async def get_book_structure(
 
     # ── 4. Build metadata tree ─────────────────────────────────────────────────
     nodes, summary = build_structure_tree(
-        text, schema, include_paragraphs=include_paragraphs, detail=detail
+        text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
     )
 
     processing_ms = int((time.monotonic() - t0) * 1000)
@@ -184,6 +239,7 @@ async def get_book_structure(
             fetched_at=datetime.now(UTC),
             cached=was_cached,
             processing_time_ms=processing_ms,
+            tokenizer=_tokenizer_info(encoder),
         ),
     )
 
@@ -195,7 +251,9 @@ async def get_book_structure(
     responses={
         400: {"description": "File is not a valid EPUB"},
         413: {"description": "File exceeds the upload size limit"},
+        422: {"description": "Unknown tokenizer or invalid detail level"},
         502: {"description": "Upload to blob storage failed"},
+        503: {"description": "Tokenizer could not be fetched (transient failure)"},
     },
     summary="Upload an EPUB and analyse its structure",
 )
@@ -208,6 +266,7 @@ async def upload_book(
         "paragraph",
         description="Leaf nesting depth: paragraph | sentence | clause | word",
     ),
+    tokenizer: str | None = _TOKENIZER_QUERY,
 ) -> BookUploadResponse:
     """
     Upload an EPUB, store it in Vercel Blob storage (`books/` folder), then
@@ -218,6 +277,7 @@ async def upload_book(
     **No actual text content is included in the response.**
     """
     _validate_detail(detail)
+    encoder = _resolve_encoder(tokenizer)
     filename = file.filename or "book.epub"
     if not filename.lower().endswith(".epub"):
         raise HTTPException(
@@ -258,7 +318,7 @@ async def upload_book(
     # ── 3. Detect schema + build metadata tree ─────────────────────────────────
     schema = detect_schema(parsed.text)
     nodes, summary = build_structure_tree(
-        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail
+        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
     )
 
     processing_ms = int((time.monotonic() - t0) * 1000)
@@ -282,5 +342,6 @@ async def upload_book(
             uploaded_at=datetime.now(UTC),
             spine_document_count=parsed.spine_document_count,
             processing_time_ms=processing_ms,
+            tokenizer=_tokenizer_info(encoder),
         ),
     )

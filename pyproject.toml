@@ -21,6 +21,8 @@ dependencies = [
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
     "python-multipart>=0.0.9",
+    "tokenizers>=0.20.0",
+    "huggingface-hub>=0.26.0",
 ]
 
 [tool.vercel]
@@ -61,6 +63,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v"
 asyncio_mode = "auto"
+markers = [
+    "integration: exercises real external services (deselect with '-m \"not integration\"')",
+]
 
 [tool.coverage.run]
 source = ["src"]

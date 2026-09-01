@@ -48,6 +48,20 @@ const TAB_UPLOAD: usize = 1;
 const DETAIL_OPTIONS: [&str; 4] = ["Paragraphs", "Sentences", "Clauses", "Words"];
 const DETAIL_VALUES: [&str; 4] = ["paragraph", "sentence", "clause", "word"];
 
+/// Options for the tokenizer Select. Except for the first ("No tokens", which
+/// omits the API parameter), each label is the Hugging Face repository name
+/// sent as the `tokenizer` query parameter verbatim.
+const TOKENIZER_OPTIONS: [&str; 6] = [
+    "No tokens",
+    "bert-base-uncased",
+    "gpt2",
+    "roberta-base",
+    "distilbert-base-uncased",
+    "xlm-roberta-base",
+];
+/// Default Select index into `TOKENIZER_OPTIONS`: `bert-base-uncased`.
+const TOKENIZER_DEFAULT_IX: usize = 1;
+
 /// The workflow phase shown in the content region.
 enum Phase {
     Idle,
@@ -90,6 +104,7 @@ pub struct FormHandles {
     pub app: gpui::WeakEntity<MetabookApp>,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
+    tokenizer: Entity<SelectState<Vec<&'static str>>>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     flags: Entity<FormFlags>,
 }
@@ -99,6 +114,7 @@ pub struct MetabookApp {
     tab_ix: usize,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
+    tokenizer: Entity<SelectState<Vec<&'static str>>>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     flags: Entity<FormFlags>,
     epub_path: Option<PathBuf>,
@@ -129,6 +145,16 @@ impl MetabookApp {
             InputState::new(window, cx).placeholder("Title or author, e.g. Pride and Prejudice")
         });
         let isbn = cx.new(|cx| InputState::new(window, cx).placeholder("ISBN-10 or ISBN-13"));
+        // Optional token counting: a known Hugging Face tokenizer, defaulting
+        // to bert-base-uncased. "No tokens" omits the parameter entirely.
+        let tokenizer = cx.new(|cx| {
+            SelectState::new(
+                TOKENIZER_OPTIONS.to_vec(),
+                Some(gpui_component::IndexPath::new(TOKENIZER_DEFAULT_IX)),
+                window,
+                cx,
+            )
+        });
         // Default to sentence detail so the deeper nesting is visible without
         // requesting word-level nodes for every large book up front.
         let detail = cx.new(|cx| {
@@ -152,6 +178,7 @@ impl MetabookApp {
             tab_ix: TAB_SEARCH,
             query,
             isbn,
+            tokenizer,
             detail,
             flags,
             epub_path: None,
@@ -182,6 +209,7 @@ impl MetabookApp {
             app: cx.entity().downgrade(),
             query: self.query.clone(),
             isbn: self.isbn.clone(),
+            tokenizer: self.tokenizer.clone(),
             detail: self.detail.clone(),
             flags: self.flags.clone(),
         }
@@ -220,6 +248,16 @@ impl MetabookApp {
             .to_string()
     }
 
+    /// The API `tokenizer` value; empty means "don't count tokens".
+    fn tokenizer_value(&self, cx: &Context<Self>) -> String {
+        self.tokenizer
+            .read(cx)
+            .selected_value()
+            .filter(|label| **label != TOKENIZER_OPTIONS[0])
+            .map(|label| label.to_string())
+            .unwrap_or_default()
+    }
+
     // ── Commands ───────────────────────────────────────────────────────────────
 
     fn start_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -238,9 +276,10 @@ impl MetabookApp {
 
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
+        let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
             "Searching Gutendex…",
-            move || api::search(&base, &query, &isbn, &detail),
+            move || api::search(&base, &query, &isbn, &detail, &tokenizer),
             window,
             cx,
         );
@@ -252,9 +291,13 @@ impl MetabookApp {
         }
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
+        let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
             "Fetching and scanning the book text…",
-            move || api::fetch_by_id(&base, gutenberg_id, &detail).map(SearchOutcome::Analysis),
+            move || {
+                api::fetch_by_id(&base, gutenberg_id, &detail, &tokenizer)
+                    .map(SearchOutcome::Analysis)
+            },
             window,
             cx,
         );
@@ -270,9 +313,10 @@ impl MetabookApp {
 
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
+        let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
             "Uploading and scanning the EPUB…",
-            move || api::upload(&base, &path, &detail).map(SearchOutcome::Analysis),
+            move || api::upload(&base, &path, &detail, &tokenizer).map(SearchOutcome::Analysis),
             window,
             cx,
         );
@@ -494,14 +538,11 @@ impl MetabookApp {
         let span = selected_id.and_then(|id| ranges.get(&id).cloned());
         if let Some(span) = span {
             editor_state.update(cx, |state, cx| {
-                // gpui-component has no public targeted unfold, and the cursor
-                // stops at a fold boundary if the span is inside one; cycling
-                // folding off/on clears all folds (candidates survive) so the
-                // cursor can reach the span. Once longbridge/gpui-component#2872
-                // (unfold_ranges_containing) lands, unfold just span.bytes.start.
-                state.set_folding(false, window, cx);
-                state.set_folding(true, window, cx);
-                state.set_cursor_position(Position::new(span.line as u32, 0), window, cx);
+                // The cursor stops at a fold boundary if the span is inside
+                // one; unfold just the folds containing the span first.
+                let position = Position::new(span.line as u32, 0);
+                state.unfold_at(position, cx);
+                state.set_cursor_position(position, window, cx);
             });
             decorations.set(
                 vec![TextDecoration::new(
@@ -615,17 +656,19 @@ impl MetabookApp {
 
     pub(crate) fn search_form(handles: &FormHandles, cx: &mut App) -> AnyElement {
         let processing = handles.flags.read(cx).processing;
-        let (query, isbn, detail) = (
+        let (query, isbn, tokenizer, detail) = (
             handles.query.clone(),
             handles.isbn.clone(),
+            handles.tokenizer.clone(),
             handles.detail.clone(),
         );
         h_flex()
             .gap_2()
             .items_center()
             .child(div().flex_1().child(Input::new(&query)))
-            .child(div().w_48().child(Input::new(&isbn)))
-            .child(div().w_40().child(Select::new(&detail)))
+            .child(div().w(px(176.)).child(Input::new(&isbn)))
+            .child(div().w_56().child(Select::new(&tokenizer)))
+            .child(div().w(px(144.)).child(Select::new(&detail)))
             .child(
                 Button::new("search")
                     .primary()
@@ -674,11 +717,12 @@ impl MetabookApp {
                     .text_color(cx.theme().muted_foreground)
                     .child(chosen),
             )
-            .child(div().w_40().child(Select::new(&handles.detail)))
+            .child(div().w_56().child(Select::new(&handles.tokenizer)))
+            .child(div().w(px(144.)).child(Select::new(&handles.detail)))
             .child(
                 Button::new("analyze")
                     .primary()
-                    .icon(IconName::ArrowUp)
+                    .icon(Icon::default().path("icons/document-magnifying-glass.svg"))
                     .label("Analyze")
                     .loading(processing)
                     .disabled(processing || !has_file)
@@ -886,7 +930,7 @@ impl MetabookApp {
                     h_resizable("result-split")
                         .child(
                             resizable_panel()
-                                .size(px(300.))
+                                .size(px(360.))
                                 .size_range(px(200.)..px(560.))
                                 .child(self.render_structure_tree(tree_state, cx)),
                         )
@@ -941,7 +985,7 @@ impl MetabookApp {
             .child(div().flex_1().min_h_0().child(tree(&tree_state, {
                 let expand_gen = self.expand_gen;
                 let last_expanded = self.last_expanded.clone();
-                move |ix, entry, selected, _, _| {
+                move |ix, entry, selected, _, cx| {
                     let id = entry.item().id.clone();
                     let expanded = entry.is_expanded();
 
@@ -968,11 +1012,30 @@ impl MetabookApp {
                         Icon::new(IconName::File).small().into_any_element()
                     };
 
+                    // The materialised label carries the node's counts behind
+                    // META_SEPARATOR ("Paragraph 1␟2 sentences · 24 words ·
+                    // 31 tokens"): the name truncates while the counts render
+                    // as muted text that never shrinks, so token counts
+                    // survive a narrow panel.
+                    let label = entry.item().label.clone();
+                    let (name, counts) = match label.split_once(META_SEPARATOR) {
+                        Some((name, counts)) => (name.to_string(), Some(counts.to_string())),
+                        None => (label.to_string(), None),
+                    };
                     let content = h_flex()
                         .gap_2()
                         .items_center()
                         .child(icon)
-                        .child(div().text_sm().truncate().child(entry.item().label.clone()));
+                        .child(div().text_sm().truncate().child(name))
+                        .when_some(counts, |row, counts| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(counts),
+                            )
+                        });
 
                     // Only rows revealed by the latest expansion animate in;
                     // everything else renders statically (scrolling never
@@ -1015,10 +1078,21 @@ fn materialize_items(nodes: &[TreeNode], expanded: &HashSet<SharedString>) -> Ve
     nodes.iter().map(|n| materialize_item(n, expanded)).collect()
 }
 
+/// Joins a node's name and its counts inside the single label string a
+/// `TreeItem` can carry; the render closure splits them back apart. A control
+/// character can't appear in book text, so — unlike " — " — it never falsely
+/// splits a chapter heading that happens to contain a dash.
+const META_SEPARATOR: char = '\u{1f}';
+
 fn materialize_item(node: &TreeNode, expanded: &HashSet<SharedString>) -> TreeItem {
     let id = SharedString::from(node.id.clone());
     let is_expanded = expanded.contains(&id);
-    let item = TreeItem::new(id, SharedString::from(node.label.clone())).expanded(is_expanded);
+    let label = if node.meta.is_empty() {
+        node.label.clone()
+    } else {
+        format!("{}{META_SEPARATOR}{}", node.label, node.meta)
+    };
+    let item = TreeItem::new(id, SharedString::from(label)).expanded(is_expanded);
     if node.children.is_empty() {
         item
     } else if is_expanded {
