@@ -646,9 +646,9 @@ impl MetabookApp {
             .gap_2()
             .items_center()
             .child(div().flex_1().child(Input::new(&query)))
-            .child(div().w_44().child(Input::new(&isbn)))
+            .child(div().w(px(176.)).child(Input::new(&isbn)))
             .child(div().w_56().child(Input::new(&tokenizer)))
-            .child(div().w_36().child(Select::new(&detail)))
+            .child(div().w(px(144.)).child(Select::new(&detail)))
             .child(
                 Button::new("search")
                     .primary()
@@ -698,7 +698,7 @@ impl MetabookApp {
                     .child(chosen),
             )
             .child(div().w_56().child(Input::new(&handles.tokenizer)))
-            .child(div().w_36().child(Select::new(&handles.detail)))
+            .child(div().w(px(144.)).child(Select::new(&handles.detail)))
             .child(
                 Button::new("analyze")
                     .primary()
