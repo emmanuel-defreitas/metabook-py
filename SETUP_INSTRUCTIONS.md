@@ -1,13 +1,13 @@
 # Pushing this to emmanuel-defreitas/metabook-py
 
-The GitHub connector in this session could read the repo but not write to it (403 on every
-write attempt, even after permission changes), so here's everything ready to push from your own
-terminal instead.
+The GitHub connector in this session could read the repo
+but not write to it (403 on every write attempt, even after permission changes),
+so here's everything ready to push from your own terminal instead.
 
 ## 1. Copy these files into place
 
-Unzip the bundle, then copy the `metabook-py/` folder's contents into a local clone of the (still
-empty) repo:
+Unzip the bundle, then copy the `metabook-py/` folder's contents
+into a local clone of the (still empty) repo:
 
 ```bash
 git clone https://github.com/emmanuel-defreitas/metabook-py.git
@@ -15,8 +15,8 @@ cp -r bundle/metabook-py/. metabook-py/
 cd metabook-py
 ```
 
-(If you'd rather not clone first, `cd` into the unzipped `metabook-py/` folder directly and run
-`git init` there instead — see step 2.)
+(If you'd rather not clone first, `cd` into the unzipped `metabook-py/`
+folder directly and run `git init` there instead — see step 2.)
 
 ## 2. Init, commit, push
 
@@ -49,7 +49,7 @@ git push -u origin main
 
 ## 4. After pushing
 
-1. Run **Actions → Release → Run workflow** once to bootstrap the `dev` and `next` branches
+1. Run **Actions → Release → Run workflow** once to bootstrap the `dev`and `next` branches
    (there's nothing to release yet, but this creates the lanes).
 2. Set up the `AUTOMATION_APP_ID` / `AUTOMATION_APP_PRIVATE_KEY` secrets (a small GitHub App with
    `contents: write` + `pull_requests: write`) before relying on `promote.yml` / `next.yml` /

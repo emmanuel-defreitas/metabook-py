@@ -25,11 +25,9 @@ fn read_body(resp: ureq::Response) -> Result<String, String> {
         .read_to_string(&mut text)
         .map_err(|err| format!("Couldn't read the API response: {err}"))?;
     if text.len() as u64 > MAX_BODY_BYTES {
-        return Err(
-            "The response is too large to display (over 200 MB). \
+        return Err("The response is too large to display (over 200 MB). \
              Try a shallower detail level, like Sentence or Paragraph."
-                .into(),
-        );
+            .into());
     }
     Ok(text)
 }
@@ -59,6 +57,10 @@ pub struct TreeNode {
     /// Stable positional id: "n{i}" for top-level, then ".{j}" per child level.
     pub id: String,
     pub label: String,
+    /// Secondary counts ("2 sentences · 24 words · 31 tokens"); empty when the
+    /// node has none. Rendered muted after the label and truncated first when
+    /// the tree panel is narrow, so the label itself always stays readable.
+    pub meta: String,
     pub children: Vec<TreeNode>,
 }
 
@@ -78,7 +80,13 @@ pub enum SearchOutcome {
 }
 
 /// GET /api/books/structure — search Project Gutenberg by title/author or ISBN.
-pub fn search(base: &str, query: &str, isbn: &str, detail: &str) -> Result<SearchOutcome, String> {
+pub fn search(
+    base: &str,
+    query: &str,
+    isbn: &str,
+    detail: &str,
+    tokenizer: &str,
+) -> Result<SearchOutcome, String> {
     let mut request = ureq::get(&format!("{base}/api/books/structure"))
         .query("include_paragraphs", "true")
         .query("detail", detail)
@@ -88,6 +96,9 @@ pub fn search(base: &str, query: &str, isbn: &str, detail: &str) -> Result<Searc
     }
     if !isbn.is_empty() {
         request = request.query("isbn", isbn);
+    }
+    if !tokenizer.is_empty() {
+        request = request.query("tokenizer", tokenizer);
     }
 
     match request.call() {
@@ -100,12 +111,20 @@ pub fn search(base: &str, query: &str, isbn: &str, detail: &str) -> Result<Searc
 }
 
 /// GET /api/books/structure?gutenberg_id=… — analyse one selected match.
-pub fn fetch_by_id(base: &str, gutenberg_id: u64, detail: &str) -> Result<Analysis, String> {
-    let request = ureq::get(&format!("{base}/api/books/structure"))
+pub fn fetch_by_id(
+    base: &str,
+    gutenberg_id: u64,
+    detail: &str,
+    tokenizer: &str,
+) -> Result<Analysis, String> {
+    let mut request = ureq::get(&format!("{base}/api/books/structure"))
         .query("include_paragraphs", "true")
         .query("detail", detail)
         .query("gutenberg_id", &gutenberg_id.to_string())
         .timeout(TIMEOUT);
+    if !tokenizer.is_empty() {
+        request = request.query("tokenizer", tokenizer);
+    }
 
     match request.call() {
         Ok(resp) => parse_analysis(resp),
@@ -114,10 +133,93 @@ pub fn fetch_by_id(base: &str, gutenberg_id: u64, detail: &str) -> Result<Analys
     }
 }
 
+/// One book in the persisted library (`GET /api/books/uploads`): every book
+/// the user has uploaded or selected from search results, with its Vercel
+/// Blob link and scan state kept by the API.
+#[derive(Clone)]
+pub struct LibraryBook {
+    /// Stable document id (MongoDB ObjectId string) — used for element ids.
+    pub id: String,
+    /// Set for books resolved from Project Gutenberg; `None` for uploaded
+    /// EPUBs, which cannot be re-scanned from an id.
+    pub gutenberg_id: Option<u64>,
+    pub title: String,
+    /// Gutenberg medium cover URL; uploads carry no cover (the card renders
+    /// a placeholder instead).
+    pub cover_url: Option<String>,
+}
+
+/// GET /api/books/uploads — the persisted library, newest first.
+pub fn list_uploads(base: &str) -> Result<Vec<LibraryBook>, String> {
+    let request = ureq::get(&format!("{base}/api/books/uploads")).timeout(TIMEOUT);
+    match request.call() {
+        Ok(resp) => {
+            let text = read_body(resp)?;
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
+            parse_library(&value)
+        }
+        Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
+        Err(err) => Err(unreachable_message(base, &err)),
+    }
+}
+
+/// Cover images are thumbnails; anything larger is a wrong URL, not a cover.
+const MAX_COVER_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Download a cover image's bytes.
+///
+/// GPUI's own `img("https://…")` loader cannot be used here: the native
+/// `gpui_platform::application()` installs no HTTP client, so every remote
+/// image request fails with "No HttpClient available". Fetching the bytes
+/// ourselves keeps covers on the same blocking-ureq-on-the-background-executor
+/// path as every other request in this client.
+pub fn fetch_cover(url: &str) -> Result<Vec<u8>, String> {
+    let resp = ureq::get(url)
+        .timeout(TIMEOUT)
+        .call()
+        .map_err(|err| format!("Couldn't fetch the cover: {err}"))?;
+
+    let mut bytes = Vec::new();
+    resp.into_reader()
+        .take(MAX_COVER_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("Couldn't read the cover: {err}"))?;
+    Ok(bytes)
+}
+
+/// Project Gutenberg's medium cover for a book id.
+pub fn gutenberg_cover_url(gutenberg_id: u64) -> String {
+    format!("https://www.gutenberg.org/cache/epub/{gutenberg_id}/pg{gutenberg_id}.cover.medium.jpg")
+}
+
+fn parse_library(value: &Value) -> Result<Vec<LibraryBook>, String> {
+    let books = value
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    Some(LibraryBook {
+                        id: entry["id"].as_str()?.to_string(),
+                        gutenberg_id: entry["gutenberg_id"].as_u64(),
+                        title: entry["book"]["title"]
+                            .as_str()
+                            .unwrap_or("Untitled")
+                            .to_string(),
+                        cover_url: entry["gutenberg_id"].as_u64().map(gutenberg_cover_url),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(books)
+}
+
 /// POST /api/books/upload — upload an EPUB file for analysis.
-pub fn upload(base: &str, path: &Path, detail: &str) -> Result<Analysis, String> {
-    let bytes = std::fs::read(path)
-        .map_err(|err| format!("Couldn't read “{}”: {err}", path.display()))?;
+pub fn upload(base: &str, path: &Path, detail: &str, tokenizer: &str) -> Result<Analysis, String> {
+    let bytes =
+        std::fs::read(path).map_err(|err| format!("Couldn't read “{}”: {err}", path.display()))?;
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -125,12 +227,15 @@ pub fn upload(base: &str, path: &Path, detail: &str) -> Result<Analysis, String>
 
     let (body, content_type) = multipart_body(&filename, &bytes);
 
-    let result = ureq::post(&format!("{base}/api/books/upload"))
+    let mut request = ureq::post(&format!("{base}/api/books/upload"))
         .query("include_paragraphs", "true")
         .query("detail", detail)
         .set("Content-Type", &content_type)
-        .timeout(TIMEOUT)
-        .send_bytes(&body);
+        .timeout(TIMEOUT);
+    if !tokenizer.is_empty() {
+        request = request.query("tokenizer", tokenizer);
+    }
+    let result = request.send_bytes(&body);
 
     match result {
         Ok(resp) => parse_analysis(resp),
@@ -172,7 +277,12 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
     let tree = build_tree(&value["structure"]);
     let (schema_json, ranges) = pretty_print_with_ranges(&value);
 
-    Ok(Analysis { title, schema_json, tree, ranges })
+    Ok(Analysis {
+        title,
+        schema_json,
+        tree,
+        ranges,
+    })
 }
 
 // ── Pretty printer with node line ranges ───────────────────────────────────────
@@ -195,7 +305,14 @@ fn pretty_print_with_ranges(value: &Value) -> (String, HashMap<String, NodeSpan>
     let mut out = String::new();
     let mut line = 0usize;
     let mut ranges = HashMap::new();
-    write_value(value, 0, &NodeCtx::Outside, &mut out, &mut line, &mut ranges);
+    write_value(
+        value,
+        0,
+        &NodeCtx::Outside,
+        &mut out,
+        &mut line,
+        &mut ranges,
+    );
     (out, ranges)
 }
 
@@ -298,6 +415,7 @@ fn top_node(node: &Value, ix: usize, leaf_name: &str) -> TreeNode {
         // Part / volume / section / book
         TreeNode {
             label: node_label(node, "Section"),
+            meta: String::new(),
             children: children
                 .iter()
                 .enumerate()
@@ -318,6 +436,7 @@ fn chapter_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     });
     TreeNode {
         label: node_label(node, "Chapter"),
+        meta: String::new(),
         children,
         id,
     }
@@ -343,14 +462,38 @@ fn child_nodes(
         .unwrap_or_default()
 }
 
+/// "1 sentence" / "3 sentences".
+fn count(n: u64, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
+/// " · N tokens" when the node carries a token count (a `tokenizer` was
+/// requested), empty otherwise.
+fn token_suffix(node: &Value) -> String {
+    node["token_count"]
+        .as_u64()
+        .map(|tokens| format!(" · {}", count(tokens, "token")))
+        .unwrap_or_default()
+}
+
 fn paragraph_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     let index = node["index"].as_u64().unwrap_or(0);
     let sentences = node["sentence_count"].as_u64().unwrap_or(0);
     let words = node["word_count"].as_u64().unwrap_or(0);
+    let tokens = token_suffix(node);
     TreeNode {
         children: child_nodes(node, "sentences", &id, sentence_node),
         id,
-        label: format!("{leaf_name} {index} — {sentences} sentences · {words} words"),
+        label: format!("{leaf_name} {index}"),
+        meta: format!(
+            "{} · {}{tokens}",
+            count(sentences, "sentence"),
+            count(words, "word")
+        ),
     }
 }
 
@@ -358,20 +501,28 @@ fn sentence_node(node: &Value, id: String) -> TreeNode {
     let index = node["index"].as_u64().unwrap_or(0);
     let clauses = node["clause_count"].as_u64().unwrap_or(0);
     let words = node["word_count"].as_u64().unwrap_or(0);
+    let tokens = token_suffix(node);
     TreeNode {
         children: child_nodes(node, "clauses", &id, clause_node),
         id,
-        label: format!("Sentence {index} — {clauses} clauses · {words} words"),
+        label: format!("Sentence {index}"),
+        meta: format!(
+            "{} · {}{tokens}",
+            count(clauses, "clause"),
+            count(words, "word")
+        ),
     }
 }
 
 fn clause_node(node: &Value, id: String) -> TreeNode {
     let index = node["index"].as_u64().unwrap_or(0);
     let words = node["word_count"].as_u64().unwrap_or(0);
+    let tokens = token_suffix(node);
     TreeNode {
         children: child_nodes(node, "words", &id, word_node),
         id,
-        label: format!("Clause {index} — {words} words"),
+        label: format!("Clause {index}"),
+        meta: format!("{}{tokens}", count(words, "word")),
     }
 }
 
@@ -380,6 +531,7 @@ fn word_node(node: &Value, id: String) -> TreeNode {
     TreeNode {
         id,
         label: format!("Word {index}"),
+        meta: String::new(),
         children: Vec::new(),
     }
 }
@@ -444,15 +596,27 @@ fn status_message(code: u16, resp: ureq::Response) -> String {
         .to_string();
 
     match error_kind.as_str() {
-        "book_not_found" => "No book matched that search. Check the spelling or try an ISBN.".into(),
+        "book_not_found" => {
+            "No book matched that search. Check the spelling or try an ISBN.".into()
+        }
         "text_unavailable" => {
             "The book exists but its text couldn't be retrieved from Project Gutenberg.".into()
         }
         "invalid_epub" | "invalid_file" => {
-            let hint = detail["message"].as_str().unwrap_or("The file isn't a valid EPUB.");
+            let hint = detail["message"]
+                .as_str()
+                .unwrap_or("The file isn't a valid EPUB.");
             format!("Invalid EPUB: {hint}")
         }
         "file_too_large" => "That EPUB exceeds the API's upload size limit.".into(),
+        "tokenizer_not_found" => {
+            let name = detail["tokenizer"].as_str().unwrap_or("that tokenizer");
+            format!("Tokenizer “{name}” wasn't found on the Hugging Face Hub. Check the repository name (e.g. bert-base-uncased).")
+        }
+        "tokenizer_unavailable" => {
+            let name = detail["tokenizer"].as_str().unwrap_or("The tokenizer");
+            format!("“{name}” couldn't be fetched from the Hugging Face Hub right now. Check the API host's network and try again.")
+        }
         "blob_upload_failed" => {
             "The API couldn't store the file. Check its BLOB_READ_WRITE_TOKEN configuration.".into()
         }
@@ -462,4 +626,93 @@ fn status_message(code: u16, resp: ureq::Response) -> String {
 
 fn unreachable_message(base: &str, err: &ureq::Error) -> String {
     format!("Couldn't reach the API at {base}. Start it with `make dev`, then try again. ({err})")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn labels_include_tokens_when_counts_are_present() {
+        let structure = json!({
+            "schema": "standard_book",
+            "nodes": [{
+                "level": "chapter",
+                "index": 1,
+                "label": "CHAPTER I",
+                "paragraph_count": 1,
+                "paragraphs": [{
+                    "index": 1,
+                    "sentence_count": 2,
+                    "word_count": 24,
+                    "token_count": 31,
+                    "sentences": [{
+                        "index": 1,
+                        "clause_count": 1,
+                        "word_count": 12,
+                        "token_count": 15,
+                        "clauses": [{"index": 1, "word_count": 12, "token_count": 15}],
+                    }],
+                }],
+            }],
+        });
+        let tree = build_tree(&structure);
+        let paragraph = &tree[0].children[0];
+        assert_eq!(paragraph.label, "Paragraph 1");
+        assert_eq!(paragraph.meta, "2 sentences · 24 words · 31 tokens");
+        let sentence = &paragraph.children[0];
+        assert_eq!(sentence.label, "Sentence 1");
+        assert_eq!(sentence.meta, "1 clause · 12 words · 15 tokens");
+        assert_eq!(sentence.children[0].label, "Clause 1");
+        assert_eq!(sentence.children[0].meta, "12 words · 15 tokens");
+    }
+
+    #[test]
+    fn labels_omit_tokens_when_no_tokenizer_was_requested() {
+        let structure = json!({
+            "schema": "flat",
+            "nodes": [{"index": 1, "sentence_count": 2, "word_count": 24}],
+        });
+        let tree = build_tree(&structure);
+        assert_eq!(tree[0].label, "Paragraph 1");
+        assert_eq!(tree[0].meta, "2 sentences · 24 words");
+    }
+
+    #[test]
+    fn library_books_parse_with_covers_for_gutenberg_only() {
+        let value = json!([
+            {
+                "id": "664f1a2b3c4d5e6f70819293",
+                "source": "gutenberg",
+                "gutenberg_id": 1342,
+                "book": {"title": "Pride and Prejudice"},
+            },
+            {
+                "id": "664f1a2b3c4d5e6f70819294",
+                "source": "upload",
+                "gutenberg_id": null,
+                "book": {"title": "My Own Notes"},
+            },
+        ]);
+        let books = parse_library(&value).unwrap();
+        assert_eq!(books.len(), 2);
+
+        assert_eq!(books[0].id, "664f1a2b3c4d5e6f70819293");
+        assert_eq!(books[0].gutenberg_id, Some(1342));
+        assert_eq!(
+            books[0].cover_url.as_deref(),
+            Some("https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg")
+        );
+
+        assert_eq!(books[1].title, "My Own Notes");
+        assert_eq!(books[1].gutenberg_id, None);
+        assert_eq!(books[1].cover_url, None);
+    }
+
+    #[test]
+    fn library_parsing_skips_records_without_ids() {
+        let value = json!([{"source": "upload", "book": {"title": "No id"}}]);
+        assert!(parse_library(&value).unwrap().is_empty());
+    }
 }

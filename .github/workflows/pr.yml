@@ -55,6 +55,56 @@ jobs:
       - uses: ./.github/actions/setup
       - run: make ci
 
+  # The Python suite never compiles the Rust example, so a broken example can
+  # ship green (gpui once lacked the width helpers the forms used and nothing
+  # noticed). `cargo check --all-targets` compiles the app and its tests
+  # without linking binaries. GPUI builds from source, which is expensive, so
+  # the job runs on macOS (the example's actual target — no Linux system-dep
+  # list to maintain) and only when the PR touches example/; the skip is
+  # announced in the step summary rather than left invisible.
+  example:
+    name: example
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      # fetch-depth 2: the pull_request checkout is a merge commit, so HEAD^1
+      # is the base and one extra commit is enough to diff the PR's changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Detect example changes
+        id: changed
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q '^example/'; then
+            echo "example=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "example=false" >> "$GITHUB_OUTPUT"
+            echo "### example check skipped — no changes under \`example/\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The macOS runner images stopped shipping Rust; install it only when
+      # missing so the job keeps working if it ever comes back.
+      - name: Install Rust
+        if: ${{ steps.changed.outputs.example == 'true' }}
+        run: |
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: ${{ steps.changed.outputs.example == 'true' }}
+        with:
+          workspaces: example
+
+      - name: cargo check
+        if: ${{ steps.changed.outputs.example == 'true' }}
+        working-directory: example
+        run: cargo check --locked --all-targets
+
   # The release PR's third gate is the publishable artifact itself. If `uv
   # build` cannot produce the sdist and wheel here, the publish would fail
   # after the merge, on protected main.
