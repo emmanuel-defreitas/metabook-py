@@ -2,11 +2,14 @@
 
 A small [GPUI](https://www.gpui.rs) / [gpui-component](https://github.com/longbridge/gpui-component) desktop client for the Book Structure API in this repository.
 
-- **Search** — title/author (fuzzy, via Gutendex) or ISBN
-- **Upload EPUB** — native file picker, posts to `/api/books/upload`
-- **Tokens** — pick a Hugging Face tokenizer from the dropdown in either form (default `bert-base-uncased`) and every node in the tree shows a token count alongside its word count; choose “No tokens” and none are requested
+The window is a sidebar workspace: the sidebar (collapsible to an icon rail) holds the app identity and the **Dashboard** destination, and the work area is the Dashboard until a scan finishes.
 
-Both paths show a processing view while the API fetches and scans the document, then present the returned structural schema as code (selectable, copyable JSON).
+- **Search** — title/author (fuzzy, via Gutendex) or ISBN
+- **Upload EPUB** — drag a file onto the drop zone, or pick one with the native file picker; either way it posts to `/api/books/upload`
+- **Explore** — a cover grid of every book the API has persisted (`/api/books/uploads`); Gutenberg books show their cover and re-scan when clicked, uploaded EPUBs show a placeholder because their file lives in private blob storage
+- **Tokens** — pick a Hugging Face tokenizer from the dropdown (default `bert-base-uncased`) and every node in the tree shows a token count alongside its word count; choose “No tokens” and none are requested
+
+Any path shows a processing view while the API fetches and scans the document, then presents the returned structural schema as code (selectable, copyable JSON). The sidebar's Dashboard item takes you back.
 
 ## Run
 

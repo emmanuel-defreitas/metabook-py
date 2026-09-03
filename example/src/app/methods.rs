@@ -1,10 +1,10 @@
 //! Form state and value methods for `MetabookApp`.
 
-use gpui::{Context, Entity, Window};
+use gpui::{Context, Entity, SharedString, Window};
 use gpui_component::input::{InputEvent, InputState};
 
 use super::styles::{DETAIL_OPTIONS, DETAIL_VALUES, TOKENIZER_OPTIONS};
-use super::{FormHandles, MetabookApp, Phase};
+use super::{MetabookApp, Phase};
 
 impl MetabookApp {
     pub(super) fn on_input_event(
@@ -19,30 +19,14 @@ impl MetabookApp {
         }
     }
 
-    /// Handles for the router's page builders.
-    pub fn form_handles(&self, cx: &Context<Self>) -> FormHandles {
-        FormHandles {
-            app: cx.entity().downgrade(),
-            query: self.query.clone(),
-            isbn: self.isbn.clone(),
-            tokenizer: self.tokenizer.clone(),
-            detail: self.detail.clone(),
-            flags: self.flags.clone(),
-        }
-    }
-
-    pub(super) fn set_flags(&mut self, cx: &mut Context<Self>) {
-        let processing = self.is_processing();
-        let epub_name = self.epub_path.as_ref().map(|path| {
+    /// The chosen EPUB's file name, shown in the dashboard drop zone.
+    pub(super) fn epub_display_name(&self) -> Option<SharedString> {
+        self.epub_path.as_ref().map(|path| {
             path.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string())
                 .into()
-        });
-        self.flags.update(cx, |flags, _| {
-            flags.processing = processing;
-            flags.epub_name = epub_name;
-        });
+        })
     }
 
     pub(super) fn is_processing(&self) -> bool {

@@ -1,12 +1,13 @@
 //! Main application view.
 //!
-//! One utility-window workflow: pick a source (search Gutenberg or upload an
-//! EPUB), watch a processing state while the API fetches and scans the book,
-//! then read the returned structural schema as code.
+//! A sidebar workspace: the Dashboard (search Gutenberg, drag-and-drop an
+//! EPUB, and the persisted library grid) beside a content region that swaps
+//! to the processing, disambiguation, result, and failure views as a request
+//! progresses.
 //!
-//! State ownership: `MetabookApp` owns the workflow phase and the two input
-//! states. Async requests carry a request index so a stale response can never
-//! overwrite a newer one.
+//! State ownership: `MetabookApp` owns the workflow phase, the form states,
+//! the sidebar collapse, and the persisted library. Async requests carry a
+//! request index so a stale response can never overwrite a newer one.
 
 mod components;
 mod helpers;
@@ -17,34 +18,36 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, radians, relative, AppContext as _, BorrowAppContext as _, ClipboardItem, Context,
-    ElementId, Entity, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement,
-    PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
-    Window,
+    div, px, radians, relative, AnyElement, AppContext as _, ClipboardItem, Context, ElementId,
+    Entity, ExternalPaths, HighlightStyle, Image, ImageFormat, InteractiveElement as _,
+    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Window,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Editor, EditorState, InputState, Position, TextDecoration};
 use gpui_component::list::ListItem;
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::select::SelectState;
+use gpui_component::sidebar::{
+    Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem, SidebarToggleButton,
+};
 use gpui_component::skeleton::Skeleton;
 use gpui_component::spinner::Spinner;
-use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{tree, TreeEvent, TreeState};
 use gpui_component::{
-    h_flex, highlighter::LanguageRegistry, v_flex, ActiveTheme as _, Icon, IconName, Root,
-    Sizable as _, StyledExt as _, Theme, ThemeMode, TitleBar,
+    h_flex, highlighter::LanguageRegistry, v_flex, ActiveTheme as _, Collapsible as _, Icon,
+    IconName, Root, Sizable as _, StyledExt as _, Theme, ThemeMode, TitleBar,
 };
 use gpui_motion::{MotionExt as _, Spring, Tween};
-use gpui_navigator::{router_view, GlobalRouter, Transition as RouteTransition};
 
-use crate::api::{self, BookMatch, NodeSpan, SearchOutcome, TreeNode};
+use crate::api::{self, BookMatch, LibraryBook, NodeSpan, SearchOutcome, TreeNode};
 use helpers::{materialize_items, META_SEPARATOR};
-use styles::{DETAIL_OPTIONS, TAB_SEARCH, TAB_UPLOAD, TOKENIZER_DEFAULT_IX, TOKENIZER_OPTIONS};
+use styles::{DETAIL_OPTIONS, TOKENIZER_DEFAULT_IX, TOKENIZER_OPTIONS};
 
 /// The workflow phase shown in the content region.
 enum Phase {
@@ -80,35 +83,46 @@ enum Phase {
     },
 }
 
-/// The little bit of dynamic state the route pages need. Kept in its own
-/// entity so the router outlet can read it while `MetabookApp` itself is
-/// mid-render (reading the app entity there would be re-entrant).
-pub struct FormFlags {
-    processing: bool,
-    epub_name: Option<SharedString>,
+/// The persisted library shown on the dashboard (`GET /api/books/uploads`):
+/// every book uploaded to Vercel Blob or selected from search results, kept
+/// by the API with its scan state.
+enum Library {
+    Loading,
+    Ready(Vec<LibraryBook>),
+    Failed(SharedString),
 }
 
-/// Everything a route page needs, captured once at router setup.
-#[derive(Clone)]
-pub struct FormHandles {
-    pub app: gpui::WeakEntity<MetabookApp>,
-    query: Entity<InputState>,
-    isbn: Entity<InputState>,
-    tokenizer: Entity<SelectState<Vec<&'static str>>>,
-    detail: Entity<SelectState<Vec<&'static str>>>,
-    flags: Entity<FormFlags>,
+/// A book cover, fetched once per URL and shared by every card that shows it.
+enum Cover {
+    Loading,
+    Ready(Arc<Image>),
+    Failed,
+}
+
+/// The image format for downloaded bytes, from their magic number. GPUI needs
+/// the format up front, and a wrong guess renders nothing.
+fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => Some(ImageFormat::Jpeg),
+        [0x89, b'P', b'N', b'G', ..] => Some(ImageFormat::Png),
+        [b'G', b'I', b'F', ..] => Some(ImageFormat::Gif),
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some(ImageFormat::Webp),
+        _ => None,
+    }
 }
 
 pub struct MetabookApp {
     api_base: SharedString,
-    tab_ix: usize,
+    /// Collapsed icon-rail state of the sidebar.
+    sidebar_collapsed: bool,
     query: Entity<InputState>,
     isbn: Entity<InputState>,
     tokenizer: Entity<SelectState<Vec<&'static str>>>,
     detail: Entity<SelectState<Vec<&'static str>>>,
-    flags: Entity<FormFlags>,
     epub_path: Option<PathBuf>,
     phase: Phase,
+    library: Library,
+    covers: HashMap<SharedString, Cover>,
     /// Incremented per request; responses for an older index are discarded.
     request_ix: usize,
     /// True briefly after Copy JSON, driving the button's success feedback.
@@ -156,32 +170,30 @@ impl MetabookApp {
             )
         });
 
-        let flags = cx.new(|_| FormFlags {
-            processing: false,
-            epub_name: None,
-        });
-
         let subscriptions = vec![
             cx.subscribe_in(&query, window, Self::on_input_event),
             cx.subscribe_in(&isbn, window, Self::on_input_event),
         ];
 
-        Self {
+        let mut app = Self {
             api_base: api_base.into(),
-            tab_ix: TAB_SEARCH,
+            sidebar_collapsed: false,
             query,
             isbn,
             tokenizer,
             detail,
-            flags,
             epub_path: None,
             phase: Phase::Idle,
+            library: Library::Loading,
+            covers: HashMap::new(),
             request_ix: 0,
             copied: false,
             expand_gen: 0,
             last_expanded: None,
             _subscriptions: subscriptions,
-        }
+        };
+        app.refresh_library(cx);
+        app
     }
 
     // ── Commands ───────────────────────────────────────────────────────────────
@@ -260,7 +272,6 @@ impl MetabookApp {
         self.phase = Phase::Processing {
             message: message.into(),
         };
-        self.set_flags(cx);
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -335,7 +346,11 @@ impl MetabookApp {
                 message: message.into(),
             },
         };
-        self.set_flags(cx);
+        // A finished analysis is persisted by the API, so the library grid
+        // has a new book to show.
+        if matches!(self.phase, Phase::Done { .. }) {
+            self.refresh_library(cx);
+        }
         cx.notify();
     }
 
@@ -371,7 +386,6 @@ impl MetabookApp {
                 message: format!("“{}” isn't an .epub file.", path.display()).into(),
             };
         }
-        self.set_flags(cx);
         cx.notify();
     }
 
@@ -539,6 +553,123 @@ impl MetabookApp {
         }
     }
 
+    /// Reload the persisted library in the background.
+    ///
+    /// A library that already has books keeps them on screen while the fetch
+    /// runs (no skeleton flash), and a failed refresh only surfaces when
+    /// there is nothing to preserve.
+    fn refresh_library(&mut self, cx: &mut Context<Self>) {
+        let had_books = matches!(self.library, Library::Ready(_));
+        if !had_books {
+            self.library = Library::Loading;
+        }
+        cx.notify();
+
+        let base = self.api_base.to_string();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { api::list_uploads(&base) })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(books) => {
+                        this.library = Library::Ready(books);
+                        this.load_covers(cx);
+                    }
+                    Err(message) => {
+                        if !had_books {
+                            this.library = Library::Failed(message.into());
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fetch the covers this library needs and hasn't tried yet.
+    ///
+    /// Keyed by URL, so refreshing the library re-uses every cover already in
+    /// hand and only the genuinely new books hit the network.
+    fn load_covers(&mut self, cx: &mut Context<Self>) {
+        let Library::Ready(books) = &self.library else {
+            return;
+        };
+        let pending: Vec<SharedString> = books
+            .iter()
+            .filter_map(|book| book.cover_url.clone())
+            .map(SharedString::from)
+            .filter(|url| !self.covers.contains_key(url))
+            .collect();
+
+        for url in pending {
+            self.covers.insert(url.clone(), Cover::Loading);
+            cx.spawn(async move |this, cx| {
+                let request_url = url.to_string();
+                let result = cx
+                    .background_spawn(async move { api::fetch_cover(&request_url) })
+                    .await;
+                this.update(cx, |this, cx| {
+                    let cover = match result {
+                        Ok(bytes) => match image_format(&bytes) {
+                            Some(format) => {
+                                Cover::Ready(Arc::new(Image::from_bytes(format, bytes)))
+                            }
+                            None => Cover::Failed,
+                        },
+                        Err(_) => Cover::Failed,
+                    };
+                    this.covers.insert(url, cover);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
+
+    /// Sidebar navigation: leave a result, match list, or failure behind and
+    /// return to the dashboard. The form inputs and the chosen EPUB survive.
+    fn show_dashboard(&mut self, cx: &mut Context<Self>) {
+        if self.is_processing() || matches!(self.phase, Phase::Idle) {
+            return;
+        }
+        self.phase = Phase::Idle;
+        cx.notify();
+    }
+
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
+    /// Files dragged from the operating system onto the dashboard drop zone.
+    /// The first `.epub` wins; anything else reports what the zone accepts.
+    fn on_epub_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        if self.is_processing() {
+            return;
+        }
+        let epub = paths
+            .0
+            .iter()
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("epub"))
+            })
+            .cloned();
+        match epub {
+            Some(path) => self.set_epub_path(path, cx),
+            None => {
+                self.phase = Phase::Failed {
+                    message: "Drop an .epub file — other formats can't be scanned.".into(),
+                };
+                cx.notify();
+            }
+        }
+    }
+
     fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = if cx.theme().is_dark() {
             ThemeMode::Light
@@ -551,10 +682,10 @@ impl MetabookApp {
 
     // ── Regions ────────────────────────────────────────────────────────────────
 
-    /// Custom title bar: app identity on the left, the theme toggle on the
-    /// right. Replaces the native macOS title bar. Fully transparent with no
-    /// bottom border, so the window background reads as one surface with the
-    /// content below.
+    /// Custom title bar: window chrome only — the app identity lives in the
+    /// sidebar header, so this keeps just the appearance toggle beside the
+    /// drag area. Transparent with no bottom border, so the window reads as
+    /// one surface with the content below.
     fn render_title_bar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme_icon = if cx.theme().is_dark() {
             IconName::Sun
@@ -565,39 +696,66 @@ impl MetabookApp {
             .bg(cx.theme().transparent)
             .border_b_0()
             .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .pr_2()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .min_w_0()
-                            .child(div().text_sm().font_semibold().child("Metabook"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .truncate()
-                                    .child("Structural schema for any book"),
-                            ),
-                    )
-                    .child(
-                        h_flex().gap_2().items_center().flex_none().child(
-                            Button::new("toggle-theme")
-                                .ghost()
-                                .small()
-                                .icon(theme_icon)
-                                .tooltip("Switch between light and dark mode")
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.toggle_theme(window, cx)
-                                    }),
-                                ),
+                h_flex().w_full().items_center().justify_end().pr_2().child(
+                    Button::new("toggle-theme")
+                        .ghost()
+                        .small()
+                        .icon(theme_icon)
+                        .tooltip("Switch between light and dark mode")
+                        .on_click(cx.listener(|this, _, window, cx| this.toggle_theme(window, cx))),
+                ),
+            )
+    }
+
+    /// Persistent navigation beside the work area. The sidebar owns the app
+    /// identity and the Dashboard destination; collapsing it leaves an icon
+    /// rail so a narrow window keeps the full content width.
+    fn render_sidebar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let collapsed = self.sidebar_collapsed;
+        let on_dashboard = matches!(self.phase, Phase::Idle);
+
+        Sidebar::new("app-sidebar")
+            .collapsed(collapsed)
+            .header(
+                SidebarHeader::new().collapsed(collapsed).child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .min_w_0()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .min_w_0()
+                                .child(Icon::new(IconName::BookOpen).small())
+                                .when(!collapsed, |row| {
+                                    row.child(
+                                        div()
+                                            .text_sm()
+                                            .font_semibold()
+                                            .truncate()
+                                            .child("Metabook"),
+                                    )
+                                }),
+                        )
+                        .child(
+                            SidebarToggleButton::new()
+                                .collapsed(collapsed)
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
                         ),
+                ),
+            )
+            .child(
+                SidebarGroup::new("Library").child(
+                    SidebarMenu::new().child(
+                        SidebarMenuItem::new("Dashboard")
+                            .icon(IconName::LayoutDashboard)
+                            .active(on_dashboard)
+                            .on_click(cx.listener(|this, _, _, cx| this.show_dashboard(cx))),
                     ),
+                ),
             )
     }
 
@@ -681,45 +839,43 @@ impl MetabookApp {
             )
     }
 
-    fn render_content(&self, cx: &Context<Self>) -> impl IntoElement {
-        let content = match &self.phase {
-            Phase::Idle => self.render_idle(cx).into_any_element(),
-            Phase::Processing { message } => self
-                .render_processing(message.clone(), cx)
-                .into_any_element(),
-            Phase::Matches { matches } => {
-                self.render_matches(matches.clone(), cx).into_any_element()
+    /// The work area. Idle shows the dashboard (its own scroll owner, so the
+    /// scrollbar sits at the panel edge); every other phase is a page inside
+    /// the shared content inset.
+    fn render_content(&self, cx: &Context<Self>) -> AnyElement {
+        match &self.phase {
+            Phase::Idle => self.render_dashboard(cx),
+            Phase::Processing { message } => {
+                Self::render_page(self.render_processing(message.clone(), cx))
             }
-            Phase::Failed { message } => self.render_failed(message.clone(), cx).into_any_element(),
+            Phase::Matches { matches } => {
+                Self::render_page(self.render_matches(matches.clone(), cx))
+            }
+            Phase::Failed { message } => Self::render_page(self.render_failed(message.clone(), cx)),
             Phase::Done {
                 title,
                 tree_state,
                 editor_state,
                 ..
-            } => self
-                .render_result(title.clone(), tree_state.clone(), editor_state.clone(), cx)
-                .into_any_element(),
-        };
-        div().flex_1().min_h_0().child(content)
+            } => Self::render_page(self.render_result(
+                title.clone(),
+                tree_state.clone(),
+                editor_state.clone(),
+                cx,
+            )),
+        }
     }
 
-    fn render_idle(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// The shared content inset every non-dashboard page sits in.
+    fn render_page(inner: impl IntoElement) -> AnyElement {
         v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .text_color(cx.theme().muted_foreground)
-            .child(
-                div()
-                    .text_sm()
-                    .child("Search Project Gutenberg or upload an EPUB."),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .child("The detected structural schema appears here as code."),
-            )
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .p_4()
+            .pt_2()
+            .child(inner)
+            .into_any_element()
     }
 
     fn render_processing(&self, message: SharedString, cx: &Context<Self>) -> impl IntoElement {
@@ -1021,37 +1177,13 @@ impl Render for MetabookApp {
             .text_color(cx.theme().foreground)
             .child(self.render_title_bar(cx))
             .child(
-                v_flex()
+                // `h_flex` centres its children; the shell row must stretch
+                // so the sidebar and the work area both own the full height.
+                h_flex()
+                    .items_stretch()
                     .flex_1()
                     .min_h_0()
-                    .gap_3()
-                    .p_4()
-                    .pt_2()
-                    .child(
-                        TabBar::new("source-tabs")
-                            .selected_index(self.tab_ix)
-                            .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                                if this.tab_ix == *ix {
-                                    return;
-                                }
-                                // Slide toward the tab being selected.
-                                let (path, transition) = if *ix == TAB_UPLOAD {
-                                    ("/upload", RouteTransition::slide_left(200))
-                                } else {
-                                    ("/", RouteTransition::slide_right(200))
-                                };
-                                this.tab_ix = *ix;
-                                cx.update_global::<GlobalRouter, _>(|router, cx| {
-                                    router.push_with_transition(path.to_string(), transition, cx);
-                                });
-                                cx.notify();
-                            }))
-                            .child(Tab::new().label("Search"))
-                            .child(Tab::new().label("Upload EPUB")),
-                    )
-                    // The active form is a route; the router view animates
-                    // transitions between / (search) and /upload.
-                    .child(div().w_full().child(router_view(window, cx)))
+                    .child(self.render_sidebar(cx))
                     .child(self.render_content(cx)),
             )
             .child(self.render_status_bar(cx))

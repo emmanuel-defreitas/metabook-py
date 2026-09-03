@@ -133,6 +133,89 @@ pub fn fetch_by_id(
     }
 }
 
+/// One book in the persisted library (`GET /api/books/uploads`): every book
+/// the user has uploaded or selected from search results, with its Vercel
+/// Blob link and scan state kept by the API.
+#[derive(Clone)]
+pub struct LibraryBook {
+    /// Stable document id (MongoDB ObjectId string) — used for element ids.
+    pub id: String,
+    /// Set for books resolved from Project Gutenberg; `None` for uploaded
+    /// EPUBs, which cannot be re-scanned from an id.
+    pub gutenberg_id: Option<u64>,
+    pub title: String,
+    /// Gutenberg medium cover URL; uploads carry no cover (the card renders
+    /// a placeholder instead).
+    pub cover_url: Option<String>,
+}
+
+/// GET /api/books/uploads — the persisted library, newest first.
+pub fn list_uploads(base: &str) -> Result<Vec<LibraryBook>, String> {
+    let request = ureq::get(&format!("{base}/api/books/uploads")).timeout(TIMEOUT);
+    match request.call() {
+        Ok(resp) => {
+            let text = read_body(resp)?;
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
+            parse_library(&value)
+        }
+        Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
+        Err(err) => Err(unreachable_message(base, &err)),
+    }
+}
+
+/// Cover images are thumbnails; anything larger is a wrong URL, not a cover.
+const MAX_COVER_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Download a cover image's bytes.
+///
+/// GPUI's own `img("https://…")` loader cannot be used here: the native
+/// `gpui_platform::application()` installs no HTTP client, so every remote
+/// image request fails with "No HttpClient available". Fetching the bytes
+/// ourselves keeps covers on the same blocking-ureq-on-the-background-executor
+/// path as every other request in this client.
+pub fn fetch_cover(url: &str) -> Result<Vec<u8>, String> {
+    let resp = ureq::get(url)
+        .timeout(TIMEOUT)
+        .call()
+        .map_err(|err| format!("Couldn't fetch the cover: {err}"))?;
+
+    let mut bytes = Vec::new();
+    resp.into_reader()
+        .take(MAX_COVER_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("Couldn't read the cover: {err}"))?;
+    Ok(bytes)
+}
+
+/// Project Gutenberg's medium cover for a book id.
+pub fn gutenberg_cover_url(gutenberg_id: u64) -> String {
+    format!("https://www.gutenberg.org/cache/epub/{gutenberg_id}/pg{gutenberg_id}.cover.medium.jpg")
+}
+
+fn parse_library(value: &Value) -> Result<Vec<LibraryBook>, String> {
+    let books = value
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    Some(LibraryBook {
+                        id: entry["id"].as_str()?.to_string(),
+                        gutenberg_id: entry["gutenberg_id"].as_u64(),
+                        title: entry["book"]["title"]
+                            .as_str()
+                            .unwrap_or("Untitled")
+                            .to_string(),
+                        cover_url: entry["gutenberg_id"].as_u64().map(gutenberg_cover_url),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(books)
+}
+
 /// POST /api/books/upload — upload an EPUB file for analysis.
 pub fn upload(base: &str, path: &Path, detail: &str, tokenizer: &str) -> Result<Analysis, String> {
     let bytes =
@@ -594,5 +677,42 @@ mod tests {
         let tree = build_tree(&structure);
         assert_eq!(tree[0].label, "Paragraph 1");
         assert_eq!(tree[0].meta, "2 sentences · 24 words");
+    }
+
+    #[test]
+    fn library_books_parse_with_covers_for_gutenberg_only() {
+        let value = json!([
+            {
+                "id": "664f1a2b3c4d5e6f70819293",
+                "source": "gutenberg",
+                "gutenberg_id": 1342,
+                "book": {"title": "Pride and Prejudice"},
+            },
+            {
+                "id": "664f1a2b3c4d5e6f70819294",
+                "source": "upload",
+                "gutenberg_id": null,
+                "book": {"title": "My Own Notes"},
+            },
+        ]);
+        let books = parse_library(&value).unwrap();
+        assert_eq!(books.len(), 2);
+
+        assert_eq!(books[0].id, "664f1a2b3c4d5e6f70819293");
+        assert_eq!(books[0].gutenberg_id, Some(1342));
+        assert_eq!(
+            books[0].cover_url.as_deref(),
+            Some("https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg")
+        );
+
+        assert_eq!(books[1].title, "My Own Notes");
+        assert_eq!(books[1].gutenberg_id, None);
+        assert_eq!(books[1].cover_url, None);
+    }
+
+    #[test]
+    fn library_parsing_skips_records_without_ids() {
+        let value = json!([{"source": "upload", "book": {"title": "No id"}}]);
+        assert!(parse_library(&value).unwrap().is_empty());
     }
 }

@@ -135,7 +135,7 @@ A [FastMCP](https://gofastmcp.com) server is mounted at `/mcp`, so agents can us
 
 ## 🖥️ Desktop example (GPUI)
 
-[`example/`](example) is a native macOS client built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-component): fuzzy search or EPUB upload, an animated lazily-materialised structure tree, and a read-only JSON code editor (tree-sitter highlighting, folding) that scrolls to and highlights whichever node you select in the tree. Light and dark themes, spring animations, routed form transitions.
+[`example/`](example) is a native macOS client built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-component): a sidebar workspace whose Dashboard holds fuzzy search, EPUB drag-and-drop, and a cover grid of every book the API has scanned; selecting a book gives an animated lazily-materialised structure tree beside a read-only JSON code editor (tree-sitter highlighting, folding) that scrolls to and highlights whichever node you select. Light and dark themes, spring animations, collapsible sidebar.
 
 <div align="center">
   <picture>
