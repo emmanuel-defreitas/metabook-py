@@ -35,12 +35,14 @@ from metabook_py.core.exceptions import (
     InvalidEpubError,
     TextUnavailableError,
 )
+from metabook_py.models.book import AuthorInfo, UploadedBookInfo
 from metabook_py.services.blob import upload_epub
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
+from metabook_py.services.store import get_upload_store, scan_update_doc, upload_doc
 
 mcp = FastMCP(
     name="Book Structure MCP",
@@ -117,6 +119,10 @@ async def search_book_structure(
             "matches": [m.model_dump() for m in exc.matches],
         }
 
+    # A book was selected — persist it (unscanned) before fetching its text.
+    store = get_upload_store()
+    await store.record_gutenberg_book(book_info)
+
     try:
         text, was_cached = await fetch_book_text(
             book_info.gutenberg_id, download_url, is_html=is_html
@@ -132,6 +138,8 @@ async def search_book_structure(
     nodes, summary = build_structure_tree(
         text, schema, include_paragraphs=include_paragraphs, detail=detail
     )
+
+    await store.record_scan(book_info.gutenberg_id, scan_update_doc(schema, detail, summary, None))
 
     return {
         "book": book_info.model_dump(),
@@ -207,6 +215,17 @@ async def upload_book_epub(
     schema = detect_schema(parsed.text)
     nodes, summary = build_structure_tree(
         parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail
+    )
+
+    uploaded_book = UploadedBookInfo(
+        title=parsed.metadata.title,
+        authors=[AuthorInfo(name=a) for a in parsed.metadata.authors],
+        language=parsed.metadata.language,
+        subjects=parsed.metadata.subjects,
+        isbn=parsed.metadata.isbn,
+    )
+    await get_upload_store().record_upload(
+        upload_doc(uploaded_book, blob, schema, detail, summary, None)
     )
 
     return {

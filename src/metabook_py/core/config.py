@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     blob_folder: str = "books"
     blob_access: str = "private"  # must match the connected store's access mode
     max_upload_bytes: int = 50 * 1024 * 1024  # 50 MB
+    # MongoDB persistence for the "uploads" collection (one document per book
+    # a user uploaded or selected from search results). Empty URI = disabled;
+    # every endpoint then behaves exactly as before.
+    mongodb_uri: str = ""  # e.g. mongodb://localhost:27017 (MONGODB_URI)
+    mongodb_db: str = "metabook"
     app_name: str = "Book Structure API"
     debug: bool = False
 

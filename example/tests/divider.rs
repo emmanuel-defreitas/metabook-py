@@ -3,15 +3,15 @@
 //! through to the editor's text selection.
 
 use gpui::{
-    AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, ParentElement as _,
-    Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point,
-    prelude::FluentBuilder as _, px, relative,
+    div, point, prelude::FluentBuilder as _, px, relative, AppContext as _, Context, Entity,
+    IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels, Render, Styled as _,
+    TestAppContext, VisualTestContext, Window,
 };
 use gpui_component::input::{Editor, EditorState};
 use gpui_component::list::ListItem;
-use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
-use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_component::resizable::{h_resizable, resizable_panel, ResizableState};
+use gpui_component::tree::{tree, TreeItem, TreeState};
+use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, IconName, Sizable as _};
 
 /// Mirrors `MetabookApp::render_result`: a 360px tree pane with its own
 /// right border, then the JSON editor pane, split by `h_resizable`.
@@ -57,17 +57,13 @@ impl Render for SplitHarness {
                                     .size_range(px(200.)..px(560.))
                                     .child(tree_pane),
                             )
-                            .child(
-                                resizable_panel().child({
-                                    let pane = div().size_full().pl_3();
-                                    match &self.editor {
-                                        Some(state) => {
-                                            pane.child(Editor::new(state).h(relative(1.)))
-                                        }
-                                        None => pane.child(div().size_full()),
-                                    }
-                                }),
-                            ),
+                            .child(resizable_panel().child({
+                                let pane = div().size_full().pl_3();
+                                match &self.editor {
+                                    Some(state) => pane.child(Editor::new(state).h(relative(1.))),
+                                    None => pane.child(div().size_full()),
+                                }
+                            })),
                     ),
                 ),
             )
@@ -112,7 +108,11 @@ fn harness(
             .map(|ix| TreeItem::new(format!("n{ix}"), format!("Paragraph {ix}")))
             .collect::<Vec<_>>();
         let tree_state = Some(cx.new(|cx| TreeState::new(cx).items(items)));
-        let view = cx.new(|_| SplitHarness { resizable, editor, tree_state });
+        let view = cx.new(|_| SplitHarness {
+            resizable,
+            editor,
+            tree_state,
+        });
         split = Some(view.clone());
         gpui_component::Root::new(view, window, cx)
     });
@@ -125,14 +125,26 @@ fn harness(
 }
 
 fn drag_divider(cx: &mut VisualTestContext, from_x: Pixels, to_x: Pixels) {
-    cx.simulate_mouse_down(point(from_x, px(300.)), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_down(
+        point(from_x, px(300.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
     cx.simulate_mouse_move(
         point(from_x + px(6.), px(300.)),
         Some(MouseButton::Left),
         Modifiers::default(),
     );
-    cx.simulate_mouse_move(point(to_x, px(300.)), Some(MouseButton::Left), Modifiers::default());
-    cx.simulate_mouse_up(point(to_x, px(300.)), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        point(to_x, px(300.)),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        point(to_x, px(300.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
 }
 
 /// The split sits inside the page's `p_4` inset, so panel 1's left edge is
@@ -178,10 +190,17 @@ fn divider_drag_resizes_next_to_the_editor(cx: &mut TestAppContext) {
 
     drag_divider(cx, boundary - px(2.), boundary + px(40.));
     let size = resizable.read_with(cx, |state, _| state.sizes()[0]);
-    assert_size(size, 400., "editor pane: drag should resize, not select text");
+    assert_size(
+        size,
+        400.,
+        "editor pane: drag should resize, not select text",
+    );
     // And the drag must not have started a text selection in the editor.
     let selection_empty = editor.read_with(cx, |state, _| state.selected_range().is_empty());
-    assert!(selection_empty, "the drag leaked into the editor as a text selection");
+    assert!(
+        selection_empty,
+        "the drag leaked into the editor as a text selection"
+    );
 }
 
 /// The handle's hit area spans HANDLE_PADDING (4px) each side of the panel
@@ -204,7 +223,11 @@ fn divider_hit_area_covers_the_boundary(cx: &mut TestAppContext) {
         cx.simulate_mouse_move(point(from + px(80.), px(300.)), None, Modifiers::default());
         cx.simulate_mouse_move(point(from + px(20.), px(300.)), None, Modifiers::default());
         cx.simulate_mouse_move(point(from, px(300.)), None, Modifiers::default());
-        cx.simulate_mouse_down(point(from, px(300.)), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_down(
+            point(from, px(300.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
         cx.simulate_mouse_move(
             point(from + px(5.5), px(300.)),
             Some(MouseButton::Left),
@@ -237,5 +260,8 @@ fn divider_hit_area_covers_the_boundary(cx: &mut TestAppContext) {
             window.draw(cx).clear(cx);
         });
     }
-    assert!(failures.is_empty(), "dead spots in the divider hit area:\n{failures}");
+    assert!(
+        failures.is_empty(),
+        "dead spots in the divider hit area:\n{failures}"
+    );
 }
