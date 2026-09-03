@@ -2465,17 +2465,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui-navigator"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d98c0eab76f6cfd06cb80fb4af7a34aa0fad21ef4f7d489e639a48e2e43fc70"
-dependencies = [
- "gpui",
- "log",
- "lru",
-]
-
-[[package]]
 name = "gpui_apple"
 version = "0.1.0"
 source = "git+https://github.com/zed-industries/zed#ce48461eaadd16c65c31f835511ab96bd3b6e746"
@@ -3591,15 +3580,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lru"
-version = "0.16.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
-dependencies = [
- "hashbrown 0.16.1",
-]
-
-[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3810,7 +3790,6 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui-motion",
- "gpui-navigator",
  "gpui_platform",
  "serde_json",
  "ureq",

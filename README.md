@@ -95,6 +95,22 @@ export BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
 
 If the project is linked to Vercel, `vercel env pull` writes the token to `.env.local` (gitignored), which the app loads automatically — values there override `.env`.
 
+### Uploads collection (MongoDB, optional)
+
+Every book a user uploads or selects from search results is persisted as a
+document in a MongoDB `uploads` collection: the book metadata, format
+(`epub`), the Vercel Blob link, and the scan state (scanned yet, last
+scanned, scope, schema, total token count). The structure tree itself is
+never stored. Set `MONGODB_URI` to enable (empty = disabled, no behavior
+change); re-selecting the same Gutenberg book updates its document instead
+of duplicating it:
+
+```bash
+export MONGODB_URI=mongodb://localhost:27017
+```
+
+Browse what's stored via `GET /api/books/uploads`.
+
 ## 🌐 REST API
 
 | Method | Endpoint | Purpose |
@@ -102,6 +118,7 @@ If the project is linked to Vercel, `vercel env pull` writes the token to `.env.
 | `GET` | `/api/books/structure` | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`, `tokenizer`) |
 | `GET` | `/api/books/structure/schemas` | List the supported structural schemas |
 | `POST` | `/api/books/upload` | Upload an EPUB and analyse it |
+| `GET` | `/api/books/uploads` | List persisted upload documents (needs `MONGODB_URI`) |
 | `GET` | `/health` | Liveness + cache stats |
 
 Interactive OpenAPI docs live at `/api/docs`.
@@ -118,7 +135,7 @@ A [FastMCP](https://gofastmcp.com) server is mounted at `/mcp`, so agents can us
 
 ## 🖥️ Desktop example (GPUI)
 
-[`example/`](example) is a native macOS client built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-component): fuzzy search or EPUB upload, an animated lazily-materialised structure tree, and a read-only JSON code editor (tree-sitter highlighting, folding) that scrolls to and highlights whichever node you select in the tree. Light and dark themes, spring animations, routed form transitions.
+[`example/`](example) is a native macOS client built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-component): a sidebar workspace whose Dashboard holds fuzzy search, EPUB drag-and-drop, and a cover grid of every book the API has scanned; selecting a book gives an animated lazily-materialised structure tree beside a read-only JSON code editor (tree-sitter highlighting, folding) that scrolls to and highlights whichever node you select. Light and dark themes, spring animations, collapsible sidebar.
 
 <div align="center">
   <picture>
@@ -145,6 +162,12 @@ make dev
 
 ```bash
 cd example && cargo run
+```
+
+Or run both with one command (Ctrl-C stops both):
+
+```bash
+make serve
 ```
 
 See [`example/README.md`](example/README.md) for the `Metabook.app` bundle (with app icon) and `METABOOK_API` configuration.

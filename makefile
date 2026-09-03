@@ -3,6 +3,7 @@ path := .
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BIN                := ./bin
 DIST_DIR           ?= dist
+API_PORT           ?= 8001
 
 .PHONY: help
 help: ## Show this help message.
@@ -71,7 +72,74 @@ test: ## Run pytest.
 
 .PHONY: dev
 dev: ## Run the API locally with auto-reload.
-	@uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port 8000
+	@uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port $(API_PORT)
+
+.PHONY: serve
+serve: ## Run the API and the example GPUI client together (Ctrl-C stops both).
+	@uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port $(API_PORT) & \
+	api_pid=$$!; \
+	trap 'kill $$api_pid 2>/dev/null; pkill -P $$api_pid 2>/dev/null' EXIT INT TERM; \
+	i=0; \
+	until curl -sf http://127.0.0.1:$(API_PORT)/health >/dev/null 2>&1; do \
+	    if ! kill -0 $$api_pid 2>/dev/null; then \
+	        echo "serve: the API exited early — is port $(API_PORT) already in use?"; \
+	        exit 1; \
+	    fi; \
+	    i=$$((i+1)); \
+	    if [ $$i -ge 60 ]; then \
+	        echo "serve: the API did not become healthy within 30s"; \
+	        exit 1; \
+	    fi; \
+	    sleep 0.5; \
+	done; \
+	METABOOK_API=http://127.0.0.1:$(API_PORT) cargo run --manifest-path example/Cargo.toml
+
+.PHONY: watch
+watch: ## Rebuild + relaunch the example app on changes (keeps an API running).
+	@api_pid=""; \
+	trap 'if [ -n "$$api_pid" ]; then kill "$$api_pid" 2>/dev/null; pkill -P "$$api_pid" 2>/dev/null; fi; exit 1' \
+	    EXIT INT TERM; \
+	ensure_api() { \
+	    curl -sf http://127.0.0.1:$(API_PORT)/health >/dev/null 2>&1 && return 0; \
+	    if [ -n "$$api_pid" ] && kill -0 $$api_pid 2>/dev/null; then return 0; fi; \
+	    echo "watch: no healthy API on port $(API_PORT) — starting one"; \
+	    uv run uvicorn metabook_py.main:app --reload --host 0.0.0.0 --port $(API_PORT) & \
+	    api_pid=$$!; \
+	    i=0; \
+	    until curl -sf http://127.0.0.1:$(API_PORT)/health >/dev/null 2>&1; do \
+	        if ! kill -0 $$api_pid 2>/dev/null; then \
+	            echo "watch: the API exited early — is port $(API_PORT) already in use?"; \
+	            exit 1; \
+	        fi; \
+	        i=$$((i+1)); \
+	        if [ $$i -ge 60 ]; then \
+	            echo "watch: the API did not become healthy within 30s"; \
+	            exit 1; \
+	        fi; \
+	        sleep 0.5; \
+	    done; \
+	}; \
+	ensure_api; \
+	ref=$$(mktemp); \
+	touch -t 197001010000 "$$ref"; \
+	echo "watch: watching example/ for changes (Ctrl-C to stop)"; \
+	while true; do \
+	    changed=$$(find example/src example/tests example/assets example/Cargo.toml example/Cargo.lock \
+	        -newer "$$ref" -type f 2>/dev/null | head -1); \
+	    if [ -n "$$changed" ]; then \
+	        sleep 0.5; \
+	        touch "$$ref"; \
+	        echo "watch: change detected — rebuilding the app"; \
+	        if cargo build --manifest-path example/Cargo.toml; then \
+	            pkill -x metabook-example 2>/dev/null; \
+	            METABOOK_API=http://127.0.0.1:$(API_PORT) \
+	                example/target/debug/metabook-example & \
+	        else \
+	            echo "watch: build failed — fix the error and save again (the old app keeps running)"; \
+	        fi; \
+	    fi; \
+	    sleep 0.75; \
+	done
 
 .PHONY: docker-build
 docker-build: ## Build the Docker image.
