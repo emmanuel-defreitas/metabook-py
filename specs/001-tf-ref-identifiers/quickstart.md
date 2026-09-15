@@ -7,7 +7,7 @@ How to prove the feature works end to end. Runnable scenarios only — implement
 
 ```bash
 make setup                 # uv sync (repo already provides pytest)
-uv add --optional tf "text-fabric>=13"   # ONLY for the real-corpus smoke test; core needs none
+uv sync --extra tf         # ONLY for the real-corpus smoke test; core needs none
 ```
 
 The core library and its whole test suite must import and pass **without** `text-fabric` installed
@@ -30,8 +30,8 @@ labels Vol1/3/4; `Vol1:3` resolves to the chapter (partial depth).
 uv run pytest tests/tf_ref/test_resolve.py -k selector -v
 ```
 
-Expected: `Sec1:1:1!word2` is the second word anchored to that section;
-`Sec1:1:1!word2-4` is three nodes in canonical order; index `0`, `N+1`, `word5-3`, and
+Expected: `Vol1:3:4!word2` is the second word anchored to that section;
+`Vol1:3:4!word2-4` is three nodes in canonical order; index `0`, `N+1`, `word5-3`, and
 `word3-clause1` each fail with the error kind the contract names — and the message quotes the
 offending fragment (SC-003).
 
@@ -52,9 +52,10 @@ uv run pytest tests/tf_ref/test_roundtrip.py -v
 ```
 
 Expected: all four invariants hold over generated references — normalize idempotence,
-`serialize∘resolve == normalize`, short↔URN identity, and version-less input becoming
-version-explicit. A reference carrying a *stale* version normalizes to the loaded dataset's
-version with no warning and no error (FR-010).
+`serialize∘resolve == normalize` for canonical single-node references, short↔URN identity, and
+version-less input becoming version-explicit. A reference carrying a *stale* version normalizes
+to the loaded dataset's version with no warning and no error (FR-010). A partial-depth selector
+serializes to its canonical innermost section.
 
 Runs under `hypothesis` when installed; falls back to parametrized cases otherwise. Both count.
 
@@ -73,9 +74,9 @@ original and re-serialize to the identical escaped form — `"Intro: Notes"`, `"
 uv run pytest tests/tf_ref/test_units.py -k cache -v
 ```
 
-Expected: serializing every node in the synthetic corpus builds each section's unit list **once**
-(assert on a build counter, not wall-clock), so a full walk stays within a constant factor of
-iterating the nodes.
+Expected: serializing every word in the synthetic corpus scans that unit type **once** (assert on
+a scan counter, not wall-clock), so a full walk stays within a constant factor of iterating the
+nodes.
 
 ## Scenario 7 — Real corpus smoke test (SC-001, optional)
 

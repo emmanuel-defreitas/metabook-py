@@ -66,7 +66,10 @@ A tool holding a node wants to store or display a reference string for it that w
 
 ### User Story 4 - Round-trip guarantees for stored references (Priority: P2)
 
-A user who has stored references expects: normalizing twice equals normalizing once; serializing a resolved reference gives back the normalized form; converting to URN and back gives the original.
+A user who has stored references expects: normalizing twice equals normalizing once; serializing a
+resolved canonical reference gives back the normalized form; converting to URN and back gives the
+original. A selector on a partial-depth path resolves, but serialization canonicalizes it to the
+innermost section because a bare resolved node cannot retain the broader input path.
 
 **Why this priority**: These invariants are what make references safe to store, compare, and deduplicate.
 
@@ -75,7 +78,7 @@ A user who has stored references expects: normalizing twice equals normalizing o
 **Acceptance Scenarios**:
 
 1. **Given** any valid reference r, **When** normalize(normalize(r)) is compared to normalize(r), **Then** they are identical.
-2. **Given** any valid single-node reference r, **When** serialize(resolve(r)) is compared to normalize(r), **Then** they are identical.
+2. **Given** any valid canonical single-node reference r, **When** serialize(resolve(r)) is compared to normalize(r), **Then** they are identical.
 3. **Given** any valid reference, **When** converted to URN and back to short form, **Then** the original short form is recovered.
 4. **Given** a range reference, **When** resolved and each returned node is serialized, **Then** the first and last serializations correspond to the range bounds.
 
@@ -147,7 +150,9 @@ Code that already calls `resolve_ref(ref_str, tf_app)` and `node_to_ref(node, tf
 ### Measurable Outcomes
 
 - **SC-001**: The same library, with no code changes, passes its full test suite on a three-level synthetic corpus and, when available, a smoke test on a real Biblical corpus with different level names.
-- **SC-002**: 100% of generated valid references satisfy all four round-trip invariants (normalize idempotence, serialize∘resolve, URN↔short, version-less → version-explicit).
+- **SC-002**: 100% of generated valid references satisfy normalization idempotence, URN↔short,
+  and version-less → version-explicit; canonical single-node references additionally satisfy
+  serialize∘resolve.
 - **SC-003**: 100% of malformed inputs in the test corpus produce an error whose message contains the offending fragment; range/index errors additionally state the valid range.
 - **SC-004**: Serializing every node in a corpus is at most a constant factor slower than iterating those nodes once, after the first serialization per section warms the cache.
 - **SC-005**: A unit that spans two innermost sections is addressable from exactly one section (the one where it begins) and serializes back to that same section.

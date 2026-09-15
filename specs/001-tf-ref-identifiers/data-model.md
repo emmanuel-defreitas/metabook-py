@@ -43,7 +43,7 @@ type **whose first slot lies in the section's slot range**, in canonical order.
   so round-trips close (SC-002, SC-005).
 - A unit spanning two sections belongs to the one holding its first slot, in both directions (FR-012).
 - Empty list ⇒ `TypeNotInSection`, never `IndexOutOfRange` (spec edge case).
-- Cached per pair on the resolver (FR-017), scoped to one adapter instance, so no invalidation.
+- Cached per unit type and language, scoped to one adapter instance, so no invalidation.
 
 ## Corpus identity
 
@@ -53,13 +53,15 @@ cross-version stability.
 
 ## Corpus adapter (the port)
 
-Not a spec entity; the seam that makes FR-001 and SC-006 work. Six operations:
+Not a spec entity; the seam that makes FR-001 and SC-006 work. Operations:
 
 | Operation | Returns | Backed by (Text-Fabric) |
 |---|---|---|
+| `corpus_id()` | `str` | app corpus/repository identity |
 | `section_types()` | `tuple[str, ...]` | `T.sectionTypes` |
 | `version()` | `str` | `A.version` |
-| `languages()` / `default_language()` | codes | `T.languages` |
+| `default_language()` | code | adapter setting (defaults to `en`) |
+| `node_type(node)` | `str` | `F.otype.v(node)` |
 | `node_from_section(values, lang)` | node \| `None` | `T.nodeFromSection(section, lang=…)` |
 | `section_from_node(node, lang)` | `tuple[str, ...]` | `T.sectionFromNode(n, lang=…)` |
 | `slots(node)` / `units_of_type(otype)` | slot ids / nodes | `E.oslots.s`, `F.otype.s` |

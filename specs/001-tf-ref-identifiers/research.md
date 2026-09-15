@@ -25,8 +25,8 @@ drifts); inferring depth from the reference string (unresolvable — `A:B` is am
 ## R2 — Unit lists and section anchoring (FR-011, FR-012, SC-005)
 
 **Decision**: A unit of type `t` belongs to section `s` iff **its first slot lies in `s`'s slot range**.
-Compute by walking `s`'s slots in order and, for each slot, taking `L.u(slot, otype=t)`, keeping a
-unit only when that slot is its minimum slot. Result is canonical order by construction.
+Walk units of `t` in native order once, map each unit's first slot to its section path, and populate
+the lists for that path and its ancestors. Result is canonical order by construction.
 
 **Rationale**: Text-Fabric's `L.d(section, otype=t)` returns *embedded* nodes. A clause spanning
 two verses is embedded in neither, so `L.d` silently drops it from both — which would violate
@@ -42,13 +42,12 @@ identity and making indices ambiguous).
 
 ## R3 — Cache design (FR-017, SC-004)
 
-**Decision**: `dict[(section_node, unit_type), tuple[int, ...]]` on the resolver instance, plus the
-inverse `dict[(section_node, unit_type, node)] -> index` built lazily from the same tuple.
+**Decision**: Build `dict[(section_node, unit_type), tuple[int, ...]]` and the inverse
+`dict[(section_node, unit_type, node)] -> index` on the first request for a unit type and language.
 Cache is scoped to one adapter instance (one corpus identity), so it never needs invalidation.
 
-**Rationale**: SC-004 asks for a constant factor over a single walk. Building a section's list is
-O(slots in section); every subsequent index lookup and index computation in that section is O(1).
-Serializing every node touches each section's builder once.
+**Rationale**: SC-004 asks for a constant factor over a single walk. One unit scan populates every
+section list for that type; subsequent list and position lookups are O(1).
 
 **Alternatives rejected**: global LRU keyed by corpus id (invalidation problem across versions for
 no gain); precomputing all sections at load (pays for sections nobody references, and SC-004 only
@@ -116,8 +115,8 @@ a different generator, not a different test.
 
 1. **Sibling headings that collide** — spec says "first in canonical order"; that makes some
    sections unaddressable. Documented, not fixed.
-2. **Partial-depth selectors** — `Sec1!word2` counts units anchored anywhere under `Sec1`. Correct
-   per spec assumption, but the index is only stable while the section's children are stable.
+2. **Partial-depth selectors** — `Sec1!word2` counts units anchored anywhere under `Sec1`, but a
+   resolved bare node serializes to its innermost section because it carries no source-path state.
 3. **`urn:tf:` reserved-character policy** — the grammar contract fixes percent-encoding for the URN
    form; whether that must match RFC 8141 r-components exactly is unresolved and unused here.
 4. **Language fallback** — behaviour when a corpus lacks headings in the requested language

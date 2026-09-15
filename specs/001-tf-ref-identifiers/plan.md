@@ -12,8 +12,8 @@ runtime. The library never hardcodes level names or depth: it asks the loaded co
 section types and treats section values as opaque strings.
 
 Technical approach: a small pure-Python core (grammar, escaping, `Reference` value object,
-normalization) sitting on a narrow **corpus adapter protocol** — the six operations the core
-needs (section types, version, languages, section lookup, section-of-node, slots-of-node).
+normalization) sitting on a narrow **corpus adapter protocol** — only the operations the core
+needs (corpus identity, node type, section metadata and lookup, slots, and unit iteration).
 Text-Fabric is one implementation of that protocol; an in-memory synthetic corpus is another.
 That split is what makes SC-001 (same code, different corpora) and SC-006 (offline test suite)
 structural rather than aspirational, and keeps `text-fabric` an optional dependency.
