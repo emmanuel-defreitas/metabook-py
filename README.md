@@ -70,6 +70,35 @@ is unchanged.
 curl "http://127.0.0.1:8000/api/books/structure?title=Pride+and+Prejudice&tokenizer=bert-base-uncased"
 ```
 
+### Text-Fabric reference identifiers
+
+The standalone `tf_ref` package resolves and serializes durable references against any loaded
+Text-Fabric corpus by reading its section hierarchy at runtime:
+
+```python
+from tf_ref import TextFabricAdapter, normalize, resolve, serialize
+
+corpus = TextFabricAdapter(tf_app)
+node = resolve("Genesis:1:1!word3", corpus)
+stored = serialize(node, corpus)  # e.g. bhsa@2021/Genesis:1:1!word3
+assert normalize("Genesis:1:1!word3", corpus) == stored
+```
+
+- Short grammar: `[corpus[@version]/]section[:section...][!typeN[-N]]`; canonical URNs use
+  `urn:tf:corpus[@version]:section[:section...][!typeN[-N]]`.
+- A heading containing `:`, `/`, `!`, `@`, whitespace, or `"` is double-quoted; embedded quotes
+  are doubled, as in `"say ""hi"""`. URNs percent-encode headings.
+- Positions are 1-based and ranges are inclusive. A unit belongs to the section containing its
+  first text slot, including units that continue into a later section.
+- Selectors on partial section paths resolve normally; serializing the resulting node emits the
+  canonical innermost section because a bare node does not retain its original broader path.
+- Positional identifiers are stable only within one `(corpus id, version, language)` triple.
+- Current ambiguities are limited to colliding sibling headings, partial-depth selector stability,
+  strict RFC treatment of URN components, missing-language fallback, and multi-section spans.
+
+Multi-section spans are intentionally deferred. A future form can name both endpoints after `!`
+without changing today's section grammar; current ranges must stay within one addressed section.
+
 ## 🚀 Quick start
 
 ```bash
