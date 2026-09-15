@@ -1074,8 +1074,6 @@ impl MetabookApp {
         v_flex()
             .size_full()
             .pr_3()
-            .border_r_1()
-            .border_color(cx.theme().border)
             .child(
                 h_flex().justify_end().pb_1().child(
                     Button::new("collapse-all")
