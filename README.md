@@ -330,3 +330,7 @@ are deferred to an authorised review/release step.
 
 Future feedback ideas, outside this change: dialogue share per chapter with
 quoted spans represented only by positions, and sentence-length distributions.
+
+The `/health` response and OpenAPI `info.version` report the installed package
+version (or `pyproject.toml` for source-only deployments), so release verification
+can compare the running API with the PyPI release.
