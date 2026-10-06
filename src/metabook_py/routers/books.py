@@ -43,7 +43,7 @@ from metabook_py.models.structure import (
 from metabook_py.models.upload import UploadRecord
 from metabook_py.services.blob import upload_epub
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
-from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
+from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
@@ -114,6 +114,11 @@ def _tokenizer_info(encoder: TokenEncoder | None) -> TokenizerInfo | None:
     return TokenizerInfo(name=encoder.name, vocab_size=encoder.vocab_size)
 
 
+_SCHEMA_QUERY = Query(
+    None,
+    description="Force the schema builder; confidence and evidence still describe automatic detection",
+)
+
 _TOKENIZER_QUERY = Query(
     None,
     description=(
@@ -165,6 +170,7 @@ async def get_book_structure(
         description="Leaf nesting depth: paragraph | sentence | clause | word",
     ),
     tokenizer: str | None = _TOKENIZER_QUERY,
+    schema_override: SchemaType | None = _SCHEMA_QUERY,
 ) -> BookStructureResponse:
     """
     Locate a book on Project Gutenberg via the Gutendex API, download and
@@ -230,7 +236,7 @@ async def get_book_structure(
         ) from exc
 
     # ── 3. Detect schema ───────────────────────────────────────────────────────
-    schema = detect_schema(text)
+    schema = detect_schema(text, schema_override=schema_override)
 
     # ── 4. Build metadata tree ─────────────────────────────────────────────────
     nodes, summary = build_structure_tree(
@@ -247,7 +253,7 @@ async def get_book_structure(
     return BookStructureResponse(
         book=book_info,
         structure=StructureDetail(
-            **{"schema": schema.name.value},
+            **{"schema": schema.name.value, **schema.explanation()},
             schema_confidence=schema.confidence,
             summary=summary,
             nodes=[n.model_dump() for n in nodes],
@@ -284,6 +290,7 @@ async def upload_book(
         description="Leaf nesting depth: paragraph | sentence | clause | word",
     ),
     tokenizer: str | None = _TOKENIZER_QUERY,
+    schema_override: SchemaType | None = _SCHEMA_QUERY,
 ) -> BookUploadResponse:
     """
     Upload an EPUB, store it in Vercel Blob storage (`books/` folder), then
@@ -333,7 +340,7 @@ async def upload_book(
         ) from exc
 
     # ── 3. Detect schema + build metadata tree ─────────────────────────────────
-    schema = detect_schema(parsed.text)
+    schema = detect_schema(parsed.text, schema_override=schema_override)
     nodes, summary = build_structure_tree(
         parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
     )
@@ -358,7 +365,7 @@ async def upload_book(
         book=uploaded_book,
         blob=blob_info,
         structure=StructureDetail(
-            **{"schema": schema.name.value},
+            **{"schema": schema.name.value, **schema.explanation()},
             schema_confidence=schema.confidence,
             summary=summary,
             nodes=[n.model_dump() for n in nodes],

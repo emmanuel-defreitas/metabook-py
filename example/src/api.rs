@@ -35,7 +35,10 @@ fn read_body(resp: ureq::Response) -> Result<String, String> {
 /// A successful structural analysis, ready for presentation.
 pub struct Analysis {
     pub title: String,
-    /// Pretty-printed JSON of the full API response.
+    /// Pretty-printed JSON of the full API response, including schema_score,
+    /// schema_evidence and schema_candidates. These are heuristic rule support
+    /// and structural counts, not probabilities or source-text excerpts.
+    /// Unknown additive fields remain visible here without changing node ids.
     pub schema_json: String,
     /// The structure nodes as a plain label tree (no book text).
     pub tree: Vec<TreeNode>,

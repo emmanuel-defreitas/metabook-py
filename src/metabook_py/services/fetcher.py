@@ -6,6 +6,7 @@ Responsibilities
 - Fetch raw book text from a Project Gutenberg URL (plain-text or HTML).
 - Strip HTML tags when the source is HTML.
 - Remove Project Gutenberg boilerplate (header / footer between *** markers).
+- Remove confirmed opening contents pages before structural counting.
 - Normalise whitespace.
 - Cache the cleaned text by gutenberg_id (TTL driven by settings).
 - Enforce a rate limit on outbound Gutenberg fetches.
@@ -20,6 +21,7 @@ import httpx
 from metabook_py.core.cache import book_text_cache
 from metabook_py.core.config import settings
 from metabook_py.core.exceptions import TextUnavailableError
+from metabook_py.services.preprocessing import preprocess_text, strip_boilerplate
 
 # ── Rate-limit state (module-level, shared within the process) ─────────────────
 _fetch_lock = asyncio.Lock()
@@ -27,49 +29,31 @@ _last_fetch_at: float = 0.0
 
 
 # ── Regex constants ────────────────────────────────────────────────────────────
-_PG_START = re.compile(
-    r"\*{3}\s*START OF (?:THE |THIS )?PROJECT GUTENBERG.*?\*{3}",
-    re.IGNORECASE | re.DOTALL,
-)
-_PG_END = re.compile(
-    r"\*{3}\s*END OF (?:THE |THIS )?PROJECT GUTENBERG.*?\*{3}",
-    re.IGNORECASE | re.DOTALL,
-)
+_HTML_BLOCK = re.compile(r"</(?:p|div|h[1-6]|section|article|pre)>|<br\s*/?>", re.IGNORECASE)
 _HTML_TAG = re.compile(r"<[^>]+>")
 _HTML_ENTITY = re.compile(r"&(?:#\d+|#x[\da-fA-F]+|[a-zA-Z]+);")
-_MULTI_BLANK = re.compile(r"\n{3,}")
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
 
 
 def _strip_html(text: str) -> str:
+    text = _HTML_BLOCK.sub("\n\n", text)
     text = _HTML_TAG.sub(" ", text)
     text = _HTML_ENTITY.sub(" ", text)
-    return text
+    return "\n".join(line.strip() for line in text.splitlines())
 
 
 def _strip_boilerplate(text: str) -> str:
-    """Remove everything before *** START *** and after *** END ***."""
-    start_match = _PG_START.search(text)
-    if start_match:
-        text = text[start_match.end() :]
-
-    end_match = _PG_END.search(text)
-    if end_match:
-        text = text[: end_match.start()]
-
-    return text
+    """Compatibility wrapper for the shared Gutenberg boundary cleanup."""
+    return strip_boilerplate(text)
 
 
 def _normalise(raw: str, *, is_html: bool) -> str:
     if is_html:
         raw = _strip_html(raw)
 
-    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
-    raw = _strip_boilerplate(raw)
-    raw = _MULTI_BLANK.sub("\n\n", raw)
-    return raw.strip()
+    return preprocess_text(raw)
 
 
 async def _rate_limited_get(url: str) -> str:
@@ -109,7 +93,7 @@ async def fetch_book_text(
 
     The cleaned text has:
     - HTML tags stripped (if is_html)
-    - Project Gutenberg boilerplate removed
+    - Project Gutenberg boilerplate and confirmed opening contents pages removed
     - Windows line-endings normalised
     - Runs of 3+ blank lines collapsed to 2
 

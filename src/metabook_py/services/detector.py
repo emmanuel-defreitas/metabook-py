@@ -10,16 +10,23 @@ Detection pipeline (priority order — first match wins):
   5. flat                 — fallback; pure paragraph stream
 
 Confidence:
-  high   ≥ 5 structural markers found
-  medium   2–4 markers
-  low      1 marker
+  high     score ≥ 0.8 (normally ≥ 5 markers)
+  medium   score ≥ 0.5
+  low      weak / missing evidence; flat is a fallback, not certainty
+
+All-caps titles without repeated bylines are capped at medium; competing
+schema families cap the selected score at 0.6.
+
+Numeric scores expose heuristic rule support, not calibrated probabilities.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+
+from metabook_py.services.preprocessing import preprocess_text
 
 # ── Schema taxonomy ────────────────────────────────────────────────────────────
 
@@ -66,6 +73,21 @@ class DetectedSchema:
     name: SchemaType
     confidence: str  # "high" | "medium" | "low"
     markers_found: int
+    score: float = 0.0
+    evidence: dict[str, int] = field(default_factory=dict)
+    candidate_scores: dict[str, float] = field(default_factory=dict)
+    detected_name: SchemaType | None = None
+    overridden: bool = False
+
+    def explanation(self) -> dict:
+        """Additive fields shared by HTTP and MCP, containing no source spans."""
+        return {
+            "schema_score": self.score,
+            "schema_evidence": self.evidence,
+            "schema_candidates": self.candidate_scores,
+            "schema_detected": (self.detected_name or self.name).value,
+            "schema_overridden": self.overridden,
+        }
 
 
 # ── Compiled regex patterns ────────────────────────────────────────────────────
@@ -135,18 +157,10 @@ _STRUCTURAL_KEYWORDS = re.compile(
     r"CONTENTS|INDEX|EPILOGUE|PROLOGUE|FOREWORD|AFTERWORD|BOOK)\b",
     re.IGNORECASE,
 )
-CAPS_TITLE_RE = re.compile(r"^[A-Z][A-Z\s''\"—\-]{3,60}$", re.MULTILINE)
+CAPS_TITLE_RE = re.compile(r"^[A-Z][A-Z \t''\"—\-]{3,60}$", re.MULTILINE)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def _confidence(count: int) -> str:
-    if count >= 5:
-        return "high"
-    if count >= 2:
-        return "medium"
-    return "low"
 
 
 def _findall(pattern: re.Pattern, text: str) -> list[str]:
@@ -156,55 +170,77 @@ def _findall(pattern: re.Pattern, text: str) -> list[str]:
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
-def detect_schema(text: str) -> DetectedSchema:
+def detect_schema(text: str, *, schema_override: SchemaType | None = None) -> DetectedSchema:
+    """Select a schema with an explainable heuristic score, not a probability.
+
+    Candidate scores represent rule support, not mutually exclusive likelihoods.
+    An override changes the builder selection, never the automatic evidence.
     """
-    Analyse raw (boilerplate-stripped) text and return the best-matching
-    structural schema together with a confidence score.
-    """
-
-    # 1 ── Canonical scripture (verse-number pattern is a very strong signal)
-    verses = _findall(VERSE_RE, text)
-    if len(verses) >= 10:
-        return DetectedSchema(
-            name=SchemaType.CANONICAL_SCRIPTURE,
-            confidence=_confidence(len(verses)),
-            markers_found=len(verses),
+    text = preprocess_text(text)
+    verses = len(_findall(VERSE_RE, text))
+    parts = len(_findall(PART_RE, text))
+    chapters_word = len(_findall(CHAPTER_WORD_RE, text))
+    chapters_num = len(_findall(CHAPTER_NUM_RE, text))
+    chapters = max(chapters_word, chapters_num)
+    titles = [m for m in CAPS_TITLE_RE.finditer(text) if not _STRUCTURAL_KEYWORDS.search(m[0])]
+    # Repeated title + explicit "By ..." lines strengthen the otherwise weak
+    # all-caps heuristic. Return only a count, never an author or title excerpt.
+    bylines = sum(
+        bool(
+            re.match(r"[ \t]*\n+(?:[ \t]*\n)*[ \t]*By[ \t]+[^\n]+", text[m.end() :], re.IGNORECASE)
         )
-
-    # 2 ── Sectioned book (parts AND chapters)
-    parts = _findall(PART_RE, text)
-    chapters_word = _findall(CHAPTER_WORD_RE, text)
-    if len(parts) >= 2 and len(chapters_word) >= 2:
-        total = len(parts) + len(chapters_word)
-        return DetectedSchema(
-            name=SchemaType.SECTIONED_BOOK,
-            confidence=_confidence(total),
-            markers_found=total,
-        )
-
-    # 3 ── Standard book (chapters only)
-    chapters_num = _findall(CHAPTER_NUM_RE, text)
-    best_chapters = chapters_word if len(chapters_word) >= len(chapters_num) else chapters_num
-    if len(best_chapters) >= 2:
-        return DetectedSchema(
-            name=SchemaType.STANDARD_BOOK,
-            confidence=_confidence(len(best_chapters)),
-            markers_found=len(best_chapters),
-        )
-
-    # 4 ── Essay / story collection (ALL-CAPS titles, no chapter markers)
-    caps_titles = [t for t in _findall(CAPS_TITLE_RE, text) if not _STRUCTURAL_KEYWORDS.search(t)]
-    if len(caps_titles) >= 2:
-        return DetectedSchema(
-            name=SchemaType.ESSAY_COLLECTION,
-            confidence=_confidence(len(caps_titles)),
-            markers_found=len(caps_titles),
-        )
-
-    # 5 ── Flat fallback
+        for m in titles
+    )
     paragraph_count = len([p for p in text.split("\n\n") if p.strip()])
+    evidence = {
+        "verse_number_lines": verses,
+        "part_markers": parts,
+        "chapter_word_markers": chapters_word,
+        "chapter_numeral_markers": chapters_num,
+        "caps_title_lines": len(titles),
+        "title_byline_pairs": bylines,
+        "paragraph_blocks": paragraph_count,
+    }
+
+    def strength(count: int) -> float:
+        return round(min(0.9, 0.3 + 0.1 * count), 2) if count else 0.0
+
+    scores = {
+        SchemaType.CANONICAL_SCRIPTURE.value: strength(verses)
+        if verses >= 10
+        else round(0.03 * verses, 2),
+        SchemaType.SECTIONED_BOOK.value: strength(parts + chapters_word)
+        if parts >= 2 and chapters_word >= 2
+        else 0.0,
+        SchemaType.STANDARD_BOOK.value: strength(chapters),
+        SchemaType.ESSAY_COLLECTION.value: min(
+            strength(len(titles)), 0.85 if bylines >= 2 else 0.65
+        ),
+        SchemaType.FLAT.value: 0.2 if not (verses or parts or chapters or titles) else 0.1,
+    }
+    if verses >= 10:
+        name, count = SchemaType.CANONICAL_SCRIPTURE, verses
+    elif parts >= 2 and chapters_word >= 2:
+        name, count = SchemaType.SECTIONED_BOOK, parts + chapters_word
+    elif chapters >= 2:
+        name, count = SchemaType.STANDARD_BOOK, chapters
+    elif len(titles) >= 2:
+        name, count = SchemaType.ESSAY_COLLECTION, len(titles)
+    else:
+        name, count = SchemaType.FLAT, paragraph_count
+
+    # Keep the established rule priority, but expose competing support and
+    # reduce confidence when a different schema family is also plausible.
+    competing = (int(verses >= 10) + int(chapters >= 2) + int(len(titles) >= 2)) > 1
+    score = min(scores[name.value], 0.6) if competing else scores[name.value]
+    confidence = "high" if score >= 0.8 else "medium" if score >= 0.5 else "low"
     return DetectedSchema(
-        name=SchemaType.FLAT,
-        confidence="high",
-        markers_found=paragraph_count,
+        name=SchemaType(schema_override) if schema_override is not None else name,
+        confidence=confidence,
+        markers_found=count,
+        score=score,
+        evidence=evidence,
+        candidate_scores=scores,
+        detected_name=name,
+        overridden=schema_override is not None,
     )
