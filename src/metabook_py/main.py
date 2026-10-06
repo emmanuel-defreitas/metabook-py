@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from metabook_py.core.config import settings
+from metabook_py.core.version import package_version
 from metabook_py.routers.books import router as books_router
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
@@ -37,7 +38,7 @@ async def lifespan(app: FastAPI):  # noqa: ANN201
 
 app = FastAPI(
     title=settings.app_name,
-    version="1.0.0",
+    version=package_version(),
     description=(
         "Analyses the structural metadata of Project Gutenberg books. "
         "Returns counts of chapters, paragraphs, sentences, and words per node. "
@@ -67,7 +68,7 @@ async def health() -> dict:
 
     return {
         "status": "ok",
-        "version": "1.0.0",
+        "version": app.version,
         "cache_entries": book_text_cache.size,
     }
 

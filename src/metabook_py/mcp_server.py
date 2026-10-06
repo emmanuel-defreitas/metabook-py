@@ -38,7 +38,7 @@ from metabook_py.core.exceptions import (
 from metabook_py.models.book import AuthorInfo, UploadedBookInfo
 from metabook_py.services.blob import upload_epub
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
-from metabook_py.services.detector import SCHEMA_DEFINITIONS, detect_schema
+from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
@@ -63,12 +63,14 @@ async def search_book_structure(
     language: str = "en",
     include_paragraphs: bool = True,
     detail: str = "paragraph",
+    schema_override: SchemaType | None = None,
 ) -> dict:
     """
     Find a book on Project Gutenberg and return its full structural metadata.
 
     The response contains counts of chapters, paragraphs, sentences, and words
     per structural node. No actual book text is returned.
+    schema_override forces the builder; scores and evidence describe automatic detection.
 
     Parameters
     ----------
@@ -87,6 +89,9 @@ async def search_book_structure(
         return {"error": "Provide at least one of: title, isbn, gutenberg_id."}
     if detail not in DETAIL_LEVELS:
         return {"error": "invalid_detail", "allowed": list(DETAIL_LEVELS)}
+
+    if schema_override is not None and schema_override not in SchemaType:
+        return {"error": "invalid_schema_override", "allowed": list(SchemaType)}
 
     client = GutendexClient()
 
@@ -134,7 +139,7 @@ async def search_book_structure(
             "hint": "The book exists on Gutenberg but its plain-text file could not be retrieved.",
         }
 
-    schema = detect_schema(text)
+    schema = detect_schema(text, schema_override=schema_override)
     nodes, summary = build_structure_tree(
         text, schema, include_paragraphs=include_paragraphs, detail=detail
     )
@@ -146,6 +151,7 @@ async def search_book_structure(
         "structure": {
             "schema": schema.name.value,
             "schema_confidence": schema.confidence,
+            **schema.explanation(),
             "summary": summary.model_dump(),
             "nodes": [n.model_dump() for n in nodes],
         },
@@ -160,6 +166,7 @@ async def upload_book_epub(
     epub_url: str | None = None,
     include_paragraphs: bool = True,
     detail: str = "paragraph",
+    schema_override: SchemaType | None = None,
 ) -> dict:
     """
     Upload an EPUB, store it in Vercel Blob storage (books/ folder), and
@@ -177,6 +184,8 @@ async def upload_book_epub(
     include_paragraphs Include per-paragraph node detail (default True;
                        set False for a summary-only response on large books)
 
+    schema_override forces the builder; scores and evidence describe automatic detection.
+
     Metadata (title, authors, language, subjects, ISBN) is extracted from the
     EPUB's package document. No actual book text is returned.
     """
@@ -184,6 +193,9 @@ async def upload_book_epub(
         return {"error": "Provide exactly one of: epub_base64, epub_url."}
     if detail not in DETAIL_LEVELS:
         return {"error": "invalid_detail", "allowed": list(DETAIL_LEVELS)}
+
+    if schema_override is not None and schema_override not in SchemaType:
+        return {"error": "invalid_schema_override", "allowed": list(SchemaType)}
 
     if epub_base64 is not None:
         try:
@@ -212,7 +224,7 @@ async def upload_book_epub(
     except BlobUploadError as exc:
         return {"error": "blob_upload_failed", "detail": exc.reason}
 
-    schema = detect_schema(parsed.text)
+    schema = detect_schema(parsed.text, schema_override=schema_override)
     nodes, summary = build_structure_tree(
         parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail
     )
@@ -241,6 +253,7 @@ async def upload_book_epub(
         "structure": {
             "schema": schema.name.value,
             "schema_confidence": schema.confidence,
+            **schema.explanation(),
             "summary": summary.model_dump(),
             "nodes": [n.model_dump() for n in nodes],
         },
