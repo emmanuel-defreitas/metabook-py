@@ -46,6 +46,7 @@ from metabook_py.services.detector import (
     DetectedSchema,
     SchemaType,
 )
+from metabook_py.services.preprocessing import preprocess_text
 
 # Detail levels for the depth of leaf nesting, shallow → deep.
 DETAIL_LEVELS = ("paragraph", "sentence", "clause", "word")
@@ -584,6 +585,7 @@ def build_structure_tree(
     and parent totals are sums of their children. When None (the default),
     no token counts are computed and the output is unchanged.
     """
+    text = preprocess_text(text)
     dispatch: dict[SchemaType, Callable[[], tuple[list, StructureSummary]]] = {
         SchemaType.CANONICAL_SCRIPTURE: lambda: _build_scripture(
             text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder

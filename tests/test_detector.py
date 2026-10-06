@@ -61,10 +61,10 @@ class TestFlat:
         schema = detect_schema(norm(flat_raw))
         assert schema.name == SchemaType.FLAT
 
-    def test_confidence_is_high(self, flat_raw):
-        # Flat fallback always reports high confidence
+    def test_confidence_is_low(self, flat_raw):
+        # Missing markers cannot establish certainty
         schema = detect_schema(norm(flat_raw))
-        assert schema.confidence == "high"
+        assert schema.confidence == "low"
 
 
 class TestScripture:
