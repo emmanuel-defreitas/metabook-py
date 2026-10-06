@@ -233,3 +233,100 @@ make bootstrap-lanes
 ## 📄 License
 
 [MIT](LICENSE) © Emmanuel De Freitas
+
+
+### Explainable schema detection and cleanup
+
+REST `GET /api/books/structure` and `POST /api/books/upload`, and MCP
+`search_book_structure` and `upload_book_epub`, now include these additive
+fields inside `structure`:
+
+```json
+{
+  "schema": "standard_book",
+  "schema_confidence": "medium",
+  "schema_score": 0.5,
+  "schema_detected": "standard_book",
+  "schema_overridden": false,
+  "schema_evidence": {
+    "verse_number_lines": 0,
+    "part_markers": 0,
+    "chapter_word_markers": 2,
+    "chapter_numeral_markers": 0,
+    "caps_title_lines": 0,
+    "title_byline_pairs": 0,
+    "paragraph_blocks": 4
+  },
+  "schema_candidates": {
+    "canonical_scripture": 0.0,
+    "sectioned_book": 0.0,
+    "standard_book": 0.5,
+    "essay_or_story_collection": 0.0,
+    "flat": 0.1
+  }
+}
+```
+
+Scores are **heuristic rule support, not calibrated probabilities**. Candidate
+scores do not sum to one. Selection retains the established priority:
+scripture, sectioned book, standard book, essay/story collection, then flat.
+The evidence contains counts only, never matched source excerpts.
+
+| Schema | Signals and eligibility |
+| --- | --- |
+| `canonical_scripture` | At least 10 line-leading chapter:verse numbers; weaker inputs score `0.03 × verse_count` |
+| `sectioned_book` | At least 2 part markers and 2 explicit chapter markers; support uses their combined count |
+| `standard_book` | At least 2 explicit chapter headings or standalone dotted numerals; support uses the larger count |
+| `essay_or_story_collection` | At least 2 all-caps title lines excluding structural keywords; repeated title + `By …` lines strengthen support |
+| `flat` | Fallback, with score 0.2 when no structural signals exist and 0.1 when weak signals exist |
+
+For eligible marked schemas, support is `min(0.9, 0.3 + 0.1 × marker_count)`.
+Chapter and title candidates also expose subthreshold support for a single
+marker. Collection support is capped at 0.65 without at least two title/byline
+pairs, or 0.85 with them. When multiple schema families qualify, the selected
+score is capped at 0.6; part and chapter support alone describe one family.
+Confidence is `high` at 0.8 or above, `medium` at 0.5 or above, otherwise `low`.
+Flat fallback now reports **low**, replacing the earlier unconditional high.
+These rules can still misidentify unusual formatting.
+
+Supply `schema_override` with any schema name from `/api/books/structure/schemas`
+to choose a different builder. For example, against a local server:
+
+```bash
+curl 'http://localhost:8001/api/books/structure?gutenberg_id=1342&schema_override=flat'
+```
+
+For MCP, pass the same optional argument to either analysis tool. `schema`
+echoes the requested builder; `schema_detected`, confidence, score, evidence,
+and candidates continue to describe automatic detection. Invalid REST values
+return 422; MCP validates its enum argument (direct service calls return
+`invalid_schema_override`). Python callers can use
+`detect_schema(text, schema_override=SchemaType.FLAT)`.
+
+Detection and counting share idempotent preprocessing, including EPUB analysis.
+The fetcher reuses that cleanup instead of implementing a second license strip.
+It recognises modern starred Gutenberg START/END markers (including wrapped
+marker titles) and legacy `End of Project Gutenberg's EBook …` / Etext footers.
+It removes an explicitly labelled opening contents page, and preceding short
+metadata, only after finding at least two plausible entries and a body boundary.
+Thus contents chapter listings no longer inflate body counts or confidence in
+recognised layouts. No license boundary is guessed when markers are absent.
+Unlabelled or uncertain front matter, prefaces, contents-only inputs and contents
+following real prose are retained. Sparse, unusual contents layouts may remain;
+HTML paragraph/heading/line-break boundaries are preserved before cleanup;
+unusual markup and navigation tables may still need publisher-specific handling.
+
+All tree indices remain **one-based ordinals within the cleaned body**, restarting
+within each parent (scripture retains chapter/verse numbers). They are not byte or
+character offsets into the source download. Removing a contents page changes
+these body ordinals and totals; no original-source offset mapping is promised.
+The existing structural-only response contract remains in place.
+
+The in-repo `example/` client displays the complete response JSON, including
+these additive fields. Before release, review adoption in
+`emmanuel-defreitas/MetaBookSDK` and the MetaBook app, especially the corrected
+flat confidence and changed counts. External issue creation and publication
+are deferred to an authorised review/release step.
+
+Future feedback ideas, outside this change: dialogue share per chapter with
+quoted spans represented only by positions, and sentence-length distributions.

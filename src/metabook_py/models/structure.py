@@ -135,6 +135,27 @@ class TokenizerInfo(BaseModel):
 class StructureDetail(BaseModel):
     schema_type: str = Field(alias="schema")
     schema_confidence: str  # "high" | "medium" | "low"
+    schema_score: float = Field(
+        default=0.0,
+        ge=0,
+        le=1,
+        description="Heuristic support for the automatic selection; not a calibrated probability",
+    )
+    schema_evidence: dict[str, int] = Field(
+        default_factory=dict,
+        description="Structural signal counts in the cleaned body; no source excerpts",
+    )
+    schema_candidates: dict[str, float] = Field(
+        default_factory=dict,
+        description="Rule support per schema before ambiguity penalty; not probabilities",
+    )
+    schema_detected: str | None = Field(
+        default=None, description="Automatic selection before any override"
+    )
+    schema_overridden: bool = Field(
+        default=False,
+        description="Whether the caller supplied schema_override; confidence still describes automatic detection",
+    )
     summary: StructureSummary
     nodes: list[Any]  # list[PartNode | ChapterNode | ParagraphNode]
 
