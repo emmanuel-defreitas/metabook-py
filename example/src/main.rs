@@ -27,6 +27,9 @@ impl AssetSource for Assets {
             "icons/document-magnifying-glass.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/document-magnifying-glass.svg"
             )))),
+            "icons/upload.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/upload.svg"
+            )))),
             _ => gpui_component_assets::Assets.load(path),
         }
     }

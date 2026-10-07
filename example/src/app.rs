@@ -46,7 +46,7 @@ use gpui_component::{
 use gpui_motion::{MotionExt as _, Spring, Tween};
 
 use crate::api::{self, BookMatch, LibraryBook, NodeSpan, SearchOutcome, TreeNode};
-use helpers::{materialize_items, META_SEPARATOR};
+use helpers::{epub_from, materialize_items, META_SEPARATOR};
 use styles::{DETAIL_OPTIONS, TOKENIZER_DEFAULT_IX, TOKENIZER_OPTIONS};
 
 /// The workflow phase shown in the content region.
@@ -363,28 +363,27 @@ impl MetabookApp {
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
-                if let Some(path) = paths.into_iter().next() {
-                    this.update(cx, |this, cx| this.set_epub_path(path, cx))
-                        .ok();
-                }
+                this.update(cx, |this, cx| this.take_epub(&paths, cx)).ok();
             }
         })
         .detach();
     }
 
-    fn set_epub_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("epub"))
-        {
-            self.epub_path = Some(path);
-            if matches!(self.phase, Phase::Failed { .. }) {
-                self.phase = Phase::Idle;
+    /// The single intake for dropped and chosen files: the gate either sets
+    /// the EPUB (clearing a previous failure) or reports why it refused.
+    fn take_epub(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        match epub_from(paths) {
+            Ok(path) => {
+                self.epub_path = Some(path);
+                if matches!(self.phase, Phase::Failed { .. }) {
+                    self.phase = Phase::Idle;
+                }
             }
-        } else {
-            self.phase = Phase::Failed {
-                message: format!("“{}” isn't an .epub file.", path.display()).into(),
-            };
+            Err(reason) => {
+                self.phase = Phase::Failed {
+                    message: reason.into(),
+                };
+            }
         }
         cx.notify();
     }
@@ -646,28 +645,12 @@ impl MetabookApp {
     }
 
     /// Files dragged from the operating system onto the dashboard drop zone.
-    /// The first `.epub` wins; anything else reports what the zone accepts.
+    /// Ignored while a scan runs; otherwise the same gate as the file dialog.
     fn on_epub_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
         if self.is_processing() {
             return;
         }
-        let epub = paths
-            .0
-            .iter()
-            .find(|path| {
-                path.extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("epub"))
-            })
-            .cloned();
-        match epub {
-            Some(path) => self.set_epub_path(path, cx),
-            None => {
-                self.phase = Phase::Failed {
-                    message: "Drop an .epub file — other formats can't be scanned.".into(),
-                };
-                cx.notify();
-            }
-        }
+        self.take_epub(paths.paths(), cx);
     }
 
     fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {

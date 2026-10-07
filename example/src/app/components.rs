@@ -19,6 +19,8 @@ use gpui_component::{
     StyledExt as _,
 };
 
+use super::helpers::epub_from;
+
 use crate::api::LibraryBook;
 
 use super::styles::{DETAIL_FIELD_WIDTH, ISBN_FIELD_WIDTH};
@@ -90,74 +92,103 @@ impl MetabookApp {
             )
     }
 
-    /// EPUB intake. The zone accepts a file dragged from the operating
-    /// system and highlights while one hovers over it; the button offers the
-    /// same command for keyboard and pointer users who aren't dragging.
+    /// EPUB intake, modeled on Ely's `forms::DropZone` (the DragDropFiles
+    /// story): a dashed area with an upload glyph, a prompt, a hint, and a
+    /// Browse button for keyboard and pointer users who aren't dragging.
+    ///
+    /// While files hover, the zone answers before the drop: the drop-target
+    /// tint when the gate would take them, a danger tint when it would refuse
+    /// (several files, a folder, another format). During a scan it shows no
+    /// tint and the drop is ignored.
     fn render_drop_zone(&self, cx: &Context<Self>) -> impl IntoElement {
         let processing = self.is_processing();
         let epub_name = self.epub_display_name();
         let has_file = epub_name.is_some();
+        let theme = cx.theme();
         // Drag styling is a `'static` closure, so resolve the tokens now.
-        let drag_bg = cx.theme().accent;
-        let drag_border = cx.theme().primary;
+        let (take_bg, take_border) = (theme.drop_target, theme.drag_border);
+        let (refuse_bg, refuse_border) = (theme.danger.opacity(0.12), theme.danger);
+
+        let (prompt, hint): (SharedString, SharedString) = match epub_name {
+            Some(name) => (
+                name,
+                "Ready to analyze, or drop another EPUB to replace it".into(),
+            ),
+            None => (
+                "Drop an EPUB here".into(),
+                "One .epub file at a time".into(),
+            ),
+        };
 
         div()
             .id("epub-drop-zone")
             .w_full()
-            .h_32()
             .flex()
+            .flex_col()
             .items_center()
-            .justify_center()
+            .gap_2()
+            .px_6()
+            .py_8()
             .border_1()
             .border_dashed()
-            .border_color(cx.theme().border)
-            .rounded(cx.theme().radius)
-            .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                style.bg(drag_bg).border_color(drag_border)
+            .border_color(theme.border)
+            .rounded(theme.radius_lg)
+            .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                if processing {
+                    style
+                } else if epub_from(paths.paths()).is_ok() {
+                    style.bg(take_bg).border_color(take_border)
+                } else {
+                    style.bg(refuse_bg).border_color(refuse_border)
+                }
             })
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.on_epub_drop(paths, cx)))
             .child(
-                v_flex()
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::default().path("icons/upload.svg").large()),
+            )
+            .child(
+                div()
+                    .max_w_full()
+                    .text_color(theme.foreground)
+                    .truncate()
+                    .child(prompt),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(hint),
+            )
+            .child(
+                h_flex()
+                    .pt_2()
                     .gap_2()
                     .items_center()
                     .child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(Icon::new(IconName::FileText).large()),
+                        Button::new("choose-epub")
+                            .label("Browse…")
+                            .small()
+                            .disabled(processing)
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_epub(cx))),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .truncate()
-                            .child(epub_name.unwrap_or_else(|| "Drag and drop an EPUB".into())),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                Button::new("choose-epub")
-                                    .label("Choose EPUB…")
-                                    .disabled(processing)
-                                    .on_click(cx.listener(|this, _, _, cx| this.choose_epub(cx))),
-                            )
-                            .when(has_file, |row| {
-                                row.child(
-                                    Button::new("analyze")
-                                        .primary()
-                                        .icon(
-                                            Icon::default()
-                                                .path("icons/document-magnifying-glass.svg"),
-                                        )
-                                        .label("Analyze")
-                                        .loading(processing)
-                                        .disabled(processing)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.start_upload(window, cx)
-                                        })),
-                                )
-                            }),
-                    ),
+                    .when(has_file, |row| {
+                        row.child(
+                            Button::new("analyze")
+                                .primary()
+                                .small()
+                                .icon(Icon::default().path("icons/document-magnifying-glass.svg"))
+                                .label("Analyze")
+                                .loading(processing)
+                                .disabled(processing)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.start_upload(window, cx)
+                                    }),
+                                ),
+                        )
+                    }),
             )
     }
 
