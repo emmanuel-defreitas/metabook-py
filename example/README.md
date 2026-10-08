@@ -4,6 +4,13 @@ An [Ely](https://elygpui.com) native client for the Book Structure API, with the
 
 The shared toolbar accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Upload EPUB opens the native file picker; select a file and press **Analyze**, or drop an EPUB onto the upload area.
 
+Search browses [Gutendex](https://gutendex.com) metadata through `/api/books/search`,
+including all languages by default. The result count and Previous/Next controls
+cover every page (up to 32 books per page). Select a row or **Schema** to analyse
+that book and save its structure; browsing results does not download or persist
+books. ISBN lookup is a best-effort keyword search because Gutendex does not
+provide an ISBN index.
+
 - **Library** — compact rows from `/api/books/uploads`, with actual authors, format, structural counts, and scan confidence. Scanned rows reopen their saved PostgreSQL result.
 - **Explore** — All books, Theology, Philosophy, and A.I. filter persisted book subjects.
 - **Book metadata & structure** — bibliographic and source metadata, schema classification, totals, averages, detection evidence, and candidate scores. Missing fields remain explicit.

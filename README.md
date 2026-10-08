@@ -180,6 +180,7 @@ Browse what's stored via `GET /api/books/uploads`.
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | `GET` | `/api/books/structure` | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`, `tokenizer`) |
+| `GET` | `/api/books/search` | Browse Gutendex metadata by `q` (title/author), `isbn`, or `gutenberg_id`; supports `page` and optional `language` |
 | `GET` | `/api/books/structure/schemas` | List the supported structural schemas |
 | `POST` | `/api/books/upload` | Upload an EPUB and analyse it |
 | `GET` | `/api/books/uploads` | List saved books (`DATABASE_URL` or legacy `MONGODB_URI`) |

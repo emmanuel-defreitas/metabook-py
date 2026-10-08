@@ -2,6 +2,7 @@
 REST router — /api/books/
 
 GET  /api/books/structure         → BookStructureResponse | DisambiguationResult
+GET  /api/books/search            → BookSearchResponse
 GET  /api/books/structure/schemas → list[SchemaInfo]
 POST /api/books/upload            → BookUploadResponse
 GET  /api/books/uploads           → list[UploadRecord]
@@ -24,10 +25,12 @@ from metabook_py.core.exceptions import (
     TextUnavailableError,
     TokenizerNotFoundError,
     TokenizerUnavailableError,
+    UnsupportedFormatError,
 )
 from metabook_py.models.book import (
     AuthorInfo,
     BlobInfo,
+    BookSearchResponse,
     DisambiguationResult,
     SchemaInfo,
     UploadedBookInfo,
@@ -65,6 +68,35 @@ def get_gutendex_client() -> GutendexClient:
 
 
 GutendexDep = Annotated[GutendexClient, Depends(get_gutendex_client)]
+
+
+@router.get("/search", response_model=BookSearchResponse)
+async def search_books(
+    client: GutendexDep,
+    q: str | None = Query(None, description="Words in book titles or author names"),
+    isbn: str | None = Query(
+        None, description="Best-effort keyword search; no Gutendex ISBN index"
+    ),
+    gutenberg_id: int | None = Query(None, gt=0),
+    language: str | None = Query(
+        None, description="Comma-separated language codes; all by default"
+    ),
+    page: int = Query(1, ge=1),
+) -> BookSearchResponse:
+    """Search Gutendex metadata. Selection and structural analysis are separate."""
+    q = q.strip() if q else None
+    isbn = isbn.strip() if isbn else None
+    if not any((q, isbn, gutenberg_id)):
+        raise HTTPException(422, detail="Provide a title/author query, ISBN, or Gutenberg ID.")
+    try:
+        return await client.list_books(
+            query=q, isbn=isbn, gutenberg_id=gutenberg_id, language=language, page=page
+        )
+    except GutendexUnavailableError as exc:
+        raise HTTPException(
+            status_code=504 if exc.timed_out else 502,
+            detail={"error": "gutendex_unreachable", "message": exc.reason},
+        ) from exc
 
 
 def _validate_detail(detail: str) -> None:
@@ -214,6 +246,16 @@ async def get_book_structure(
         raise HTTPException(
             status_code=504 if exc.timed_out else 502,
             detail={"error": "gutendex_unreachable", "message": exc.reason},
+        ) from exc
+
+    except UnsupportedFormatError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "unsupported_format",
+                "message": "This Gutendex book has no text or HTML format for structural analysis.",
+                "gutenberg_id": exc.gutenberg_id,
+            },
         ) from exc
 
     # A book was selected from the search results — persist it (unscanned)

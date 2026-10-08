@@ -42,7 +42,7 @@ use gpui_component::tree::{tree, TreeEvent, TreeState};
 use gpui_component::{h_flex, v_flex, Icon, IconName, Root, Sizable as _, StyledExt as _};
 use gpui_motion::{MotionExt as _, Spring, Tween};
 
-use crate::api::{self, BookMatch, LibraryBook, NodeSpan, SearchOutcome, TreeNode};
+use crate::api::{self, LibraryBook, NodeSpan, SearchOutcome, SearchPage, TreeNode};
 use helpers::{materialize_items, META_SEPARATOR};
 use styles::{DETAIL_OPTIONS, TOKENIZER_DEFAULT_IX, TOKENIZER_OPTIONS};
 
@@ -52,9 +52,9 @@ enum Phase {
     Processing {
         message: SharedString,
     },
-    /// A search matched several books; the user picks one to analyse.
+    /// One page of Gutendex results; selection starts analysis.
     Matches {
-        matches: Vec<BookMatch>,
+        page: SearchPage,
     },
     Done {
         title: SharedString,
@@ -209,20 +209,23 @@ impl MetabookApp {
             return;
         }
 
+        self.search_page(query, 1, window, cx);
+    }
+
+    fn search_page(
+        &mut self,
+        query: String,
+        page: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_processing() {
+            return;
+        }
         let base = self.api_base.to_string();
-        let detail = self.detail_value(cx);
-        let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
-            "Searching Project Gutenberg…",
-            move || match api::search_input(&query) {
-                api::SearchInput::Gutenberg(id) => {
-                    api::fetch_by_id(&base, id, &detail, &tokenizer).map(SearchOutcome::Analysis)
-                }
-                api::SearchInput::Isbn(isbn) => api::search(&base, "", &isbn, &detail, &tokenizer),
-                api::SearchInput::Title(title) => {
-                    api::search(&base, &title, "", &detail, &tokenizer)
-                }
-            },
+            "Searching Gutendex…",
+            move || api::search(&base, &query, page),
             window,
             cx,
         );
@@ -361,7 +364,7 @@ impl MetabookApp {
                     decorations: None,
                 }
             }
-            Ok(SearchOutcome::Matches(matches)) => Phase::Matches { matches },
+            Ok(SearchOutcome::Matches(page)) => Phase::Matches { page },
             Err(message) => Phase::Failed {
                 message: message.into(),
             },
@@ -709,9 +712,7 @@ impl MetabookApp {
             Phase::Processing { message } => {
                 Self::render_page(self.render_processing(message.clone(), cx))
             }
-            Phase::Matches { matches } => {
-                Self::render_page(self.render_matches(matches.clone(), cx))
-            }
+            Phase::Matches { page } => Self::render_page(self.render_matches(page.clone(), cx)),
             Phase::Failed { message } => Self::render_page(self.render_failed(message.clone(), cx)),
             Phase::Done { .. } => self.render_book_detail(cx),
         }
@@ -747,8 +748,11 @@ impl MetabookApp {
             )
     }
 
-    fn render_matches(&self, matches: Vec<BookMatch>, cx: &Context<Self>) -> impl IntoElement {
-        let count = matches.len();
+    fn render_matches(&self, page: SearchPage, cx: &Context<Self>) -> impl IntoElement {
+        let count = page.count;
+        let page_number = page.page;
+        let previous_query = page.query.clone();
+        let next_query = page.query.clone();
         v_flex()
             .size_full()
             .gap_2()
@@ -756,7 +760,12 @@ impl MetabookApp {
                 div()
                     .text_size(cx.theme().text_size(TextSize::Sm))
                     .text_color(cx.theme().colors.fg_muted)
-                    .child(format!("{count} books matched — select one to analyse")),
+                    .child(if count == 0 {
+                        "No books found in Gutendex. Try a title, author, or Gutenberg ID. ISBN lookup is a keyword search.".into()
+                    } else {
+                        let plural = if count == 1 { "" } else { "s" };
+                        format!("{count} Gutendex result{plural} · Page {page_number} — select a book to analyse")
+                    }),
             )
             .child(
                 v_flex()
@@ -765,7 +774,7 @@ impl MetabookApp {
                     .min_h_0()
                     .overflow_y_scroll()
                     .gap_1()
-                    .children(matches.into_iter().map(|book| {
+                    .children(page.matches.into_iter().map(|book| {
                         let id = book.gutenberg_id;
                         let subtitle = if book.language.is_empty() {
                             format!("#{id}")
@@ -821,6 +830,24 @@ impl MetabookApp {
                                 this.select_match(id, window, cx)
                             }))
                     })),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .when_some(page.previous_page, |row, previous| {
+                        row.child(Button::new("search-previous").small().label("Previous").on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.search_page(previous_query.clone(), previous, window, cx)
+                            }),
+                        ))
+                    })
+                    .when_some(page.next_page, |row, next| {
+                        row.child(Button::new("search-next").small().label("Next").on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.search_page(next_query.clone(), next, window, cx)
+                            }),
+                        ))
+                    }),
             )
     }
 

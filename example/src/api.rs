@@ -77,10 +77,20 @@ pub struct BookMatch {
     pub language: String,
 }
 
-/// A search either resolves to one analysed book or to a list to choose from.
+#[derive(Clone)]
+pub struct SearchPage {
+    pub query: String,
+    pub count: u64,
+    pub page: u64,
+    pub next_page: Option<u64>,
+    pub previous_page: Option<u64>,
+    pub matches: Vec<BookMatch>,
+}
+
+/// Search returns metadata; selecting a result returns its analysis.
 pub enum SearchOutcome {
     Analysis(Analysis),
-    Matches(Vec<BookMatch>),
+    Matches(SearchPage),
 }
 
 #[derive(Debug, PartialEq)]
@@ -112,32 +122,24 @@ pub fn search_input(input: &str) -> SearchInput {
     SearchInput::Title(input.to_string())
 }
 
-/// GET /api/books/structure — search Project Gutenberg by title/author or ISBN.
-pub fn search(
-    base: &str,
-    query: &str,
-    isbn: &str,
-    detail: &str,
-    tokenizer: &str,
-) -> Result<SearchOutcome, String> {
-    let mut request = ureq::get(&format!("{base}/api/books/structure"))
-        .query("include_paragraphs", "true")
-        .query("detail", detail)
+/// GET /api/books/search — one page of Gutendex metadata, without scanning.
+pub fn search(base: &str, query: &str, page: u64) -> Result<SearchOutcome, String> {
+    let request = ureq::get(&format!("{base}/api/books/search"))
+        .query("page", &page.to_string())
         .timeout(TIMEOUT);
-    if !query.is_empty() {
-        request = request.query("title", query);
-    }
-    if !isbn.is_empty() {
-        request = request.query("isbn", isbn);
-    }
-    if !tokenizer.is_empty() {
-        request = request.query("tokenizer", tokenizer);
-    }
+    let request = match search_input(query) {
+        SearchInput::Gutenberg(id) => request.query("gutenberg_id", &id.to_string()),
+        SearchInput::Isbn(isbn) => request.query("isbn", &isbn),
+        SearchInput::Title(title) => request.query("q", &title),
+    };
 
     match request.call() {
-        // ureq treats 3xx as success; the API uses 300 for "multiple matches".
-        Ok(resp) if resp.status() == 300 => parse_matches(resp).map(SearchOutcome::Matches),
-        Ok(resp) => parse_analysis(resp).map(SearchOutcome::Analysis),
+        Ok(resp) => {
+            let text = read_body(resp)?;
+            let value = serde_json::from_str(&text)
+                .map_err(|err| format!("Invalid JSON from the API: {err}"))?;
+            parse_search_page(&value, query).map(SearchOutcome::Matches)
+        }
         Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
         Err(err) => Err(unreachable_message(base, &err)),
     }
@@ -154,6 +156,7 @@ pub fn fetch_by_id(
         .query("include_paragraphs", "true")
         .query("detail", detail)
         .query("gutenberg_id", &gutenberg_id.to_string())
+        .query("language", "")
         .timeout(TIMEOUT);
     if !tokenizer.is_empty() {
         request = request.query("tokenizer", tokenizer);
@@ -604,12 +607,8 @@ fn node_label(node: &Value, fallback_kind: &str) -> String {
     format!("{kind} {}", node["index"].as_u64().unwrap_or(0))
 }
 
-fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
-    let value: Value = read_body(resp).and_then(|text| {
-        serde_json::from_str(&text).map_err(|err| format!("Invalid JSON from the API: {err}"))
-    })?;
-
-    let matches = value["matches"]
+fn parse_search_page(value: &Value, query: &str) -> Result<SearchPage, String> {
+    let matches = value["results"]
         .as_array()
         .map(|entries| {
             entries
@@ -632,12 +631,19 @@ fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
                 })
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
-
-    if matches.is_empty() {
-        return Err("Multiple books matched but the list couldn't be read. Try an ISBN.".into());
-    }
-    Ok(matches)
+        .ok_or_else(|| "The API returned an invalid search result list.".to_string())?;
+    Ok(SearchPage {
+        query: query.to_string(),
+        count: value["count"]
+            .as_u64()
+            .ok_or("Missing search result count.")?,
+        page: value["page"]
+            .as_u64()
+            .ok_or("Missing search result page.")?,
+        next_page: value["next_page"].as_u64(),
+        previous_page: value["previous_page"].as_u64(),
+        matches,
+    })
 }
 
 fn status_message(code: u16, resp: ureq::Response) -> String {
@@ -659,6 +665,9 @@ fn status_message(code: u16, resp: ureq::Response) -> String {
         }
         "text_unavailable" => {
             "The book exists but its text couldn't be retrieved from Project Gutenberg.".into()
+        }
+        "unsupported_format" => {
+            "This Gutendex book has no text or HTML format available for analysis.".into()
         }
         "invalid_epub" | "invalid_file" => {
             let hint = detail["message"]
@@ -719,6 +728,34 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn search_page_preserves_metadata_and_navigation() {
+        let value = json!({
+            "count": 70, "page": 2, "next_page": 3, "previous_page": 1,
+            "results": [{
+                "gutenberg_id": 1342, "title": "Pride and Prejudice",
+                "authors": ["Austen, Jane", "Second Author"], "language": "en,fr"
+            }]
+        });
+        let page = parse_search_page(&value, "Austen").unwrap();
+        assert_eq!((page.count, page.page), (70, 2));
+        assert_eq!((page.next_page, page.previous_page), (Some(3), Some(1)));
+        assert_eq!(page.query, "Austen");
+        assert_eq!(page.matches[0].gutenberg_id, 1342);
+        assert_eq!(page.matches[0].authors, "Austen, Jane, Second Author");
+        assert_eq!(page.matches[0].language, "en,fr");
+    }
+
+    #[test]
+    fn search_page_accepts_empty_results_and_rejects_missing_list() {
+        let empty = json!({"count": 0, "page": 1, "results": []});
+        let page = parse_search_page(&empty, "unknown").unwrap();
+        assert!(page.matches.is_empty());
+        assert_eq!(page.next_page, None);
+        assert_eq!(page.previous_page, None);
+        assert!(parse_search_page(&json!({"count": 0, "page": 1}), "unknown").is_err());
+    }
 
     #[test]
     fn labels_include_tokens_when_counts_are_present() {

@@ -47,6 +47,16 @@ class BookMatch(BaseModel):
     language: str
 
 
+class BookSearchResponse(BaseModel):
+    """One page of Gutendex metadata, without downloading or scanning books."""
+
+    count: int = Field(ge=0)
+    page: int = Field(ge=1)
+    next_page: int | None = None
+    previous_page: int | None = None
+    results: list[BookMatch] = Field(default_factory=list)
+
+
 class DisambiguationResult(BaseModel):
     status: int = 300
     message: str = "Multiple books matched. Retry with a specific gutenberg_id."
