@@ -22,6 +22,18 @@ The desktop scans at sentence detail with `bert-base-uncased`. Light/dark mode a
 
 The brand or **Library** action returns to the saved books. Book text is never returned in the result.
 
+## Source ownership
+
+- `src/app.rs` owns the request workflow, saved library, window focus, and page composition.
+- `src/app/explorer.rs` owns one retained `ResultExplorer` per successful analysis. Its internal modules keep navigation, lazy tree materialization, graph projection, and rendering together.
+- `src/app/detail.rs` composes metadata around the explorer's graph and copy action; it does not mutate tree or editor state.
+- `src/api.rs` handles blocking requests and response preparation on the background executor.
+- `src/theme.rs` bridges Ely's live theme to the retained tree and editor widgets.
+
+Explorer subscriptions and deferred work end when its result closes. Reopening a book starts fresh, and tree selection made while the editor loads is applied when it becomes ready. See [CONTEXT.md](CONTEXT.md) for the desktop domain glossary.
+
+Run focused explorer tests with `cargo test --locked --bin metabook-example app::explorer` after preparing the pinned GPUI checkout below. The entity tests exercise retained state without rendering Ely controls, whose assets are unavailable in `TestAppContext`.
+
 ## Run
 
 Prepare the pinned GPUI source checkout once from the repository root. Cargo's
