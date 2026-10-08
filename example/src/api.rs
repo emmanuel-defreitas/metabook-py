@@ -7,11 +7,42 @@
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::path::Path;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Multipart request bytes consumed by the HTTP client; parsing has no percent.
+#[derive(Default)]
+pub struct UploadProgress {
+    sent: AtomicU64,
+    total: AtomicU64,
+}
+
+impl UploadProgress {
+    pub fn snapshot(&self) -> (u64, u64) {
+        let total = self.total.load(Ordering::Acquire);
+        (self.sent.load(Ordering::Acquire).min(total), total)
+    }
+}
+
+struct UploadReader {
+    body: std::io::Cursor<Vec<u8>>,
+    progress: Arc<UploadProgress>,
+}
+
+impl std::io::Read for UploadReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.body.read(buffer)?;
+        self.progress.sent.fetch_add(read as u64, Ordering::Release);
+        Ok(read)
+    }
+}
 
 /// ureq's `into_string()` refuses bodies over 10 MB, which deep `detail=`
 /// levels on large books exceed easily; read manually with a far larger cap.
@@ -35,6 +66,7 @@ fn read_body(resp: ureq::Response) -> Result<String, String> {
 /// A successful structural analysis, ready for presentation.
 pub struct Analysis {
     pub title: String,
+    pub value: Value,
     /// Pretty-printed JSON of the full API response, including schema_score,
     /// schema_evidence and schema_candidates. These are heuristic rule support
     /// and structural counts, not probabilities or source-text excerpts.
@@ -76,38 +108,69 @@ pub struct BookMatch {
     pub language: String,
 }
 
-/// A search either resolves to one analysed book or to a list to choose from.
-pub enum SearchOutcome {
-    Analysis(Analysis),
-    Matches(Vec<BookMatch>),
+#[derive(Clone)]
+pub struct SearchPage {
+    pub query: String,
+    pub count: u64,
+    pub page: u64,
+    pub next_page: Option<u64>,
+    pub previous_page: Option<u64>,
+    pub matches: Vec<BookMatch>,
 }
 
-/// GET /api/books/structure — search Project Gutenberg by title/author or ISBN.
-pub fn search(
-    base: &str,
-    query: &str,
-    isbn: &str,
-    detail: &str,
-    tokenizer: &str,
-) -> Result<SearchOutcome, String> {
-    let mut request = ureq::get(&format!("{base}/api/books/structure"))
-        .query("include_paragraphs", "true")
-        .query("detail", detail)
+/// Search returns metadata; selecting a result returns its analysis.
+pub enum SearchOutcome {
+    Analysis(Analysis),
+    Matches(SearchPage),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SearchInput {
+    Title(String),
+    Isbn(String),
+    Gutenberg(u64),
+}
+
+/// A single field accepts all three identifiers, including hyphenated ISBNs.
+pub fn search_input(input: &str) -> SearchInput {
+    let input = input.trim();
+    let compact: String = input
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect();
+    if (compact.len() == 10 || compact.len() == 13)
+        && compact.chars().enumerate().all(|(i, c)| {
+            c.is_ascii_digit() || (i == 9 && compact.len() == 10 && matches!(c, 'x' | 'X'))
+        })
+    {
+        return SearchInput::Isbn(compact.to_uppercase());
+    }
+    if let Ok(id) = input.trim_start_matches('#').parse::<u64>() {
+        if id > 0 {
+            return SearchInput::Gutenberg(id);
+        }
+    }
+    SearchInput::Title(input.to_string())
+}
+
+/// GET /api/books/search — one page of Gutendex metadata, without scanning.
+pub fn search(base: &str, query: &str, page: u64) -> Result<SearchOutcome, String> {
+    let request = ureq::get(&format!("{base}/api/books/search"))
+        .query("page", &page.to_string())
         .timeout(TIMEOUT);
-    if !query.is_empty() {
-        request = request.query("title", query);
-    }
-    if !isbn.is_empty() {
-        request = request.query("isbn", isbn);
-    }
-    if !tokenizer.is_empty() {
-        request = request.query("tokenizer", tokenizer);
-    }
+    let request = match search_input(query) {
+        SearchInput::Gutenberg(id) => request.query("gutenberg_id", &id.to_string()),
+        SearchInput::Isbn(isbn) => request.query("isbn", &isbn),
+        SearchInput::Title(title) => request.query("q", &title),
+    };
 
     match request.call() {
-        // ureq treats 3xx as success; the API uses 300 for "multiple matches".
-        Ok(resp) if resp.status() == 300 => parse_matches(resp).map(SearchOutcome::Matches),
-        Ok(resp) => parse_analysis(resp).map(SearchOutcome::Analysis),
+        Ok(resp) => {
+            let text = read_body(resp)?;
+            let value = serde_json::from_str(&text)
+                .map_err(|err| format!("Invalid JSON from the API: {err}"))?;
+            parse_search_page(&value, query).map(SearchOutcome::Matches)
+        }
         Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
         Err(err) => Err(unreachable_message(base, &err)),
     }
@@ -124,6 +187,7 @@ pub fn fetch_by_id(
         .query("include_paragraphs", "true")
         .query("detail", detail)
         .query("gutenberg_id", &gutenberg_id.to_string())
+        .query("language", "")
         .timeout(TIMEOUT);
     if !tokenizer.is_empty() {
         request = request.query("tokenizer", tokenizer);
@@ -141,7 +205,7 @@ pub fn fetch_by_id(
 /// Blob link and scan state kept by the API.
 #[derive(Clone)]
 pub struct LibraryBook {
-    /// Stable document id (MongoDB ObjectId string) — used for element ids.
+    /// Stable database record id — used for element ids and saved results.
     pub id: String,
     /// Set for books resolved from Project Gutenberg; `None` for uploaded
     /// EPUBs, which cannot be re-scanned from an id.
@@ -150,6 +214,7 @@ pub struct LibraryBook {
     /// Gutenberg medium cover URL; uploads carry no cover (the card renders
     /// a placeholder instead).
     pub cover_url: Option<String>,
+    pub record: Value,
 }
 
 /// GET /api/books/uploads — the persisted library, newest first.
@@ -162,6 +227,18 @@ pub fn list_uploads(base: &str) -> Result<Vec<LibraryBook>, String> {
                 .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
             parse_library(&value)
         }
+        Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
+        Err(err) => Err(unreachable_message(base, &err)),
+    }
+}
+
+/// Open an uploaded book's committed structural result without another scan.
+pub fn fetch_upload(base: &str, id: &str) -> Result<Analysis, String> {
+    match ureq::get(&format!("{base}/api/books/uploads/{id}/structure"))
+        .timeout(TIMEOUT)
+        .call()
+    {
+        Ok(resp) => parse_analysis(resp),
         Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
         Err(err) => Err(unreachable_message(base, &err)),
     }
@@ -211,6 +288,7 @@ fn parse_library(value: &Value) -> Result<Vec<LibraryBook>, String> {
                             .unwrap_or("Untitled")
                             .to_string(),
                         cover_url: entry["gutenberg_id"].as_u64().map(gutenberg_cover_url),
+                        record: entry.clone(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -220,7 +298,13 @@ fn parse_library(value: &Value) -> Result<Vec<LibraryBook>, String> {
 }
 
 /// POST /api/books/upload — upload an EPUB file for analysis.
-pub fn upload(base: &str, path: &Path, detail: &str, tokenizer: &str) -> Result<Analysis, String> {
+pub fn upload(
+    base: &str,
+    path: &Path,
+    detail: &str,
+    tokenizer: &str,
+    progress: Arc<UploadProgress>,
+) -> Result<Analysis, String> {
     let bytes =
         std::fs::read(path).map_err(|err| format!("Couldn't read “{}”: {err}", path.display()))?;
     let filename = path
@@ -229,16 +313,21 @@ pub fn upload(base: &str, path: &Path, detail: &str, tokenizer: &str) -> Result<
         .unwrap_or_else(|| "book.epub".into());
 
     let (body, content_type) = multipart_body(&filename, &bytes);
+    progress.total.store(body.len() as u64, Ordering::Release);
 
     let mut request = ureq::post(&format!("{base}/api/books/upload"))
         .query("include_paragraphs", "true")
         .query("detail", detail)
         .set("Content-Type", &content_type)
+        .set("Content-Length", &body.len().to_string())
         .timeout(TIMEOUT);
     if !tokenizer.is_empty() {
         request = request.query("tokenizer", tokenizer);
     }
-    let result = request.send_bytes(&body);
+    let result = request.send(UploadReader {
+        body: std::io::Cursor::new(body),
+        progress,
+    });
 
     match result {
         Ok(resp) => parse_analysis(resp),
@@ -273,6 +362,22 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
     let value: Value = serde_json::from_str(&text)
         .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
 
+    analysis_from_value(value)
+}
+
+fn analysis_from_value(value: Value) -> Result<Analysis, String> {
+    if !value["book"].is_object()
+        || value["book"]["title"]
+            .as_str()
+            .is_none_or(|s| s.trim().is_empty())
+        || !value["structure"].is_object()
+        || value["structure"]["schema"]
+            .as_str()
+            .is_none_or(|s| s.trim().is_empty())
+        || !value["structure"]["nodes"].is_array()
+    {
+        return Err("The API response is missing a valid book or structural schema. Please try the book again.".into());
+    }
     let title = value["book"]["title"]
         .as_str()
         .unwrap_or("Untitled")
@@ -282,6 +387,7 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
 
     Ok(Analysis {
         title,
+        value,
         schema_json,
         tree,
         ranges,
@@ -394,7 +500,7 @@ fn element_ctx(ctx: &NodeCtx, ix: usize) -> NodeCtx {
 // canonical_scripture leaves are verses; every other schema's leaves are
 // paragraphs. Labels never contain book text.
 
-fn build_tree(structure: &Value) -> Vec<TreeNode> {
+pub(crate) fn build_tree(structure: &Value) -> Vec<TreeNode> {
     let leaf_name = if structure["schema"].as_str() == Some("canonical_scripture") {
         "Verse"
     } else {
@@ -439,7 +545,17 @@ fn chapter_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     });
     TreeNode {
         label: node_label(node, "Chapter"),
-        meta: String::new(),
+        meta: {
+            let mut counts = format!(
+                "{} · {}",
+                count(node["paragraph_count"].as_u64().unwrap_or(0), "paragraph"),
+                count(node["total_words"].as_u64().unwrap_or(0), "word")
+            );
+            if let Some(tokens) = node["total_tokens"].as_u64() {
+                counts.push_str(&format!(" · {}", count(tokens, "token")));
+            }
+            counts
+        },
         children,
         id,
     }
@@ -549,12 +665,8 @@ fn node_label(node: &Value, fallback_kind: &str) -> String {
     format!("{kind} {}", node["index"].as_u64().unwrap_or(0))
 }
 
-fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
-    let value: Value = read_body(resp).and_then(|text| {
-        serde_json::from_str(&text).map_err(|err| format!("Invalid JSON from the API: {err}"))
-    })?;
-
-    let matches = value["matches"]
+fn parse_search_page(value: &Value, query: &str) -> Result<SearchPage, String> {
+    let matches = value["results"]
         .as_array()
         .map(|entries| {
             entries
@@ -577,12 +689,19 @@ fn parse_matches(resp: ureq::Response) -> Result<Vec<BookMatch>, String> {
                 })
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
-
-    if matches.is_empty() {
-        return Err("Multiple books matched but the list couldn't be read. Try an ISBN.".into());
-    }
-    Ok(matches)
+        .ok_or_else(|| "The API returned an invalid search result list.".to_string())?;
+    Ok(SearchPage {
+        query: query.to_string(),
+        count: value["count"]
+            .as_u64()
+            .ok_or("Missing search result count.")?,
+        page: value["page"]
+            .as_u64()
+            .ok_or("Missing search result page.")?,
+        next_page: value["next_page"].as_u64(),
+        previous_page: value["previous_page"].as_u64(),
+        matches,
+    })
 }
 
 fn status_message(code: u16, resp: ureq::Response) -> String {
@@ -604,6 +723,9 @@ fn status_message(code: u16, resp: ureq::Response) -> String {
         }
         "text_unavailable" => {
             "The book exists but its text couldn't be retrieved from Project Gutenberg.".into()
+        }
+        "unsupported_format" => {
+            "This Gutendex book has no text or HTML format available for analysis.".into()
         }
         "invalid_epub" | "invalid_file" => {
             let hint = detail["message"]
@@ -633,8 +755,103 @@ fn unreachable_message(base: &str, err: &ureq::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chapter_rows_show_their_summary_and_optional_tokens() {
+        let node = serde_json::json!({"label":"Chapter 1","paragraph_count":2,"total_words":40,"total_tokens":50});
+        assert_eq!(
+            super::chapter_node(&node, "n0".into(), "Paragraph").meta,
+            "2 paragraphs · 40 words · 50 tokens"
+        );
+    }
+
+    #[test]
+    fn unified_search_distinguishes_title_isbn_and_gutenberg_id() {
+        use super::{search_input, SearchInput};
+        assert_eq!(
+            search_input("Pride and Prejudice"),
+            SearchInput::Title("Pride and Prejudice".into())
+        );
+        assert_eq!(
+            search_input("978-0-14-143951-8"),
+            SearchInput::Isbn("9780141439518".into())
+        );
+        assert_eq!(
+            search_input("0-8044-2957-x"),
+            SearchInput::Isbn("080442957X".into())
+        );
+        assert_eq!(search_input("#1342"), SearchInput::Gutenberg(1342));
+        assert_eq!(search_input("1342"), SearchInput::Gutenberg(1342));
+        assert_eq!(search_input("0"), SearchInput::Title("0".into()));
+    }
+
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn upload_progress_counts_consumed_request_bytes_and_stops_at_eof() {
+        let progress = Arc::new(UploadProgress::default());
+        progress.total.store(5, Ordering::Release);
+        let mut reader = UploadReader {
+            body: std::io::Cursor::new(b"12345".to_vec()),
+            progress: progress.clone(),
+        };
+        assert_eq!(progress.snapshot(), (0, 5));
+        assert_eq!(reader.read(&mut [0; 2]).unwrap(), 2);
+        assert_eq!(progress.snapshot(), (2, 5));
+        assert_eq!(reader.read(&mut [0; 8]).unwrap(), 3);
+        assert_eq!(reader.read(&mut [0; 8]).unwrap(), 0);
+        assert_eq!(progress.snapshot(), (5, 5));
+    }
+
+    #[test]
+    fn analysis_rejects_missing_or_malformed_schema_in_valid_json() {
+        for value in [
+            json!({}),
+            json!({"book":{"title":"Book"},"structure":{}}),
+            json!({"book":{"title":"Book"},"structure":{"schema":"standard_book","nodes":{}}}),
+            json!({"book":{"title":"Book"},"structure":{"schema":" ","nodes":[]}}),
+            json!({"book":{"title":7},"structure":{"schema":"standard_book","nodes":[]}}),
+        ] {
+            assert!(analysis_from_value(value).is_err());
+        }
+    }
+
+    #[test]
+    fn analysis_accepts_a_valid_empty_structure_and_future_schema_names() {
+        let value = json!({"book":{"title":"Empty book"},"structure":{"schema":"future_schema","nodes":[]}});
+        let analysis = analysis_from_value(value.clone()).unwrap();
+        assert_eq!(analysis.title, "Empty book");
+        assert_eq!(analysis.value, value);
+        assert!(analysis.tree.is_empty());
+    }
+
+    #[test]
+    fn search_page_preserves_metadata_and_navigation() {
+        let value = json!({
+            "count": 70, "page": 2, "next_page": 3, "previous_page": 1,
+            "results": [{
+                "gutenberg_id": 1342, "title": "Pride and Prejudice",
+                "authors": ["Austen, Jane", "Second Author"], "language": "en,fr"
+            }]
+        });
+        let page = parse_search_page(&value, "Austen").unwrap();
+        assert_eq!((page.count, page.page), (70, 2));
+        assert_eq!((page.next_page, page.previous_page), (Some(3), Some(1)));
+        assert_eq!(page.query, "Austen");
+        assert_eq!(page.matches[0].gutenberg_id, 1342);
+        assert_eq!(page.matches[0].authors, "Austen, Jane, Second Author");
+        assert_eq!(page.matches[0].language, "en,fr");
+    }
+
+    #[test]
+    fn search_page_accepts_empty_results_and_rejects_missing_list() {
+        let empty = json!({"count": 0, "page": 1, "results": []});
+        let page = parse_search_page(&empty, "unknown").unwrap();
+        assert!(page.matches.is_empty());
+        assert_eq!(page.next_page, None);
+        assert_eq!(page.previous_page, None);
+        assert!(parse_search_page(&json!({"count": 0, "page": 1}), "unknown").is_err());
+    }
 
     #[test]
     fn labels_include_tokens_when_counts_are_present() {

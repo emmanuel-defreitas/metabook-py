@@ -223,25 +223,21 @@ def _mock_blob_ok() -> respx.Route:
 
 
 def _mock_gutendex_single(gutenberg_id: int) -> respx.Route:
-    return respx.get(url__startswith=GUTENDEX_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "results": [
-                    {
-                        "id": gutenberg_id,
-                        "title": "Pride and Prejudice",
-                        "authors": [{"name": "Jane Austen", "birth_year": 1775}],
-                        "languages": ["en"],
-                        "subjects": ["Fiction"],
-                        "formats": {
-                            "text/plain; charset=utf-8": f"https://www.gutenberg.org/cache/epub/{gutenberg_id}/pg{gutenberg_id}.txt"
-                        },
-                    }
-                ]
+    def respond(request: httpx.Request) -> httpx.Response:
+        book = {
+            "id": gutenberg_id,
+            "title": "Pride and Prejudice",
+            "authors": [{"name": "Jane Austen", "birth_year": 1775}],
+            "languages": ["en"],
+            "subjects": ["Fiction"],
+            "formats": {
+                "text/plain; charset=utf-8": f"https://www.gutenberg.org/cache/epub/{gutenberg_id}/pg{gutenberg_id}.txt"
             },
-        )
-    )
+        }
+        payload = book if request.url.path.endswith(f"/{gutenberg_id}/") else {"results": [book]}
+        return httpx.Response(200, json=payload)
+
+    return respx.get(url__startswith=GUTENDEX_URL).mock(side_effect=respond)
 
 
 def _mock_gutenberg_text(gutenberg_id: int) -> respx.Route:
@@ -274,6 +270,26 @@ async def test_upload_endpoint_records_upload_document(
     assert doc["scan"]["schema"] == "standard_book"
     assert doc["scan"]["tokenizer"] == "stub-tokenizer"
     assert doc["scan"]["total_tokens"] > 0
+
+
+@respx.mock
+async def test_upload_does_not_confirm_success_when_database_save_fails(
+    client, blob_token, fake_store, monkeypatch
+):
+    from metabook_py.services.postgres import PersistenceError
+
+    async def fail_save(doc):
+        raise PersistenceError("The database operation failed. No successful save was confirmed.")
+
+    monkeypatch.setattr(fake_store, "record_upload", fail_save)
+    _mock_blob_ok()
+    response = await client.post(
+        "/api/books/upload",
+        files={"file": ("pride.epub", build_epub(), "application/epub+zip")},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"] == "database_unavailable"
+    assert "record_id" not in response.json()
 
 
 @respx.mock

@@ -24,6 +24,10 @@ class UploadedBookInfo(BaseModel):
     language: str = "en"
     subjects: list[str] = Field(default_factory=list)
     isbn: str | None = None
+    publisher: str | None = None
+    license: str | None = None
+    date: str | None = None
+    number_of_pages: int | None = Field(default=None, ge=0)
 
 
 class BlobInfo(BaseModel):
@@ -41,6 +45,16 @@ class BookMatch(BaseModel):
     title: str
     authors: list[str]
     language: str
+
+
+class BookSearchResponse(BaseModel):
+    """One page of Gutendex metadata, without downloading or scanning books."""
+
+    count: int = Field(ge=0)
+    page: int = Field(ge=1)
+    next_page: int | None = None
+    previous_page: int | None = None
+    results: list[BookMatch] = Field(default_factory=list)
 
 
 class DisambiguationResult(BaseModel):

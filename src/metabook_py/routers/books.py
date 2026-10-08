@@ -2,6 +2,7 @@
 REST router — /api/books/
 
 GET  /api/books/structure         → BookStructureResponse | DisambiguationResult
+GET  /api/books/search            → BookSearchResponse
 GET  /api/books/structure/schemas → list[SchemaInfo]
 POST /api/books/upload            → BookUploadResponse
 GET  /api/books/uploads           → list[UploadRecord]
@@ -24,10 +25,12 @@ from metabook_py.core.exceptions import (
     TextUnavailableError,
     TokenizerNotFoundError,
     TokenizerUnavailableError,
+    UnsupportedFormatError,
 )
 from metabook_py.models.book import (
     AuthorInfo,
     BlobInfo,
+    BookSearchResponse,
     DisambiguationResult,
     SchemaInfo,
     UploadedBookInfo,
@@ -65,6 +68,35 @@ def get_gutendex_client() -> GutendexClient:
 
 
 GutendexDep = Annotated[GutendexClient, Depends(get_gutendex_client)]
+
+
+@router.get("/search", response_model=BookSearchResponse)
+async def search_books(
+    client: GutendexDep,
+    q: str | None = Query(None, description="Words in book titles or author names"),
+    isbn: str | None = Query(
+        None, description="Best-effort keyword search; no Gutendex ISBN index"
+    ),
+    gutenberg_id: int | None = Query(None, gt=0),
+    language: str | None = Query(
+        None, description="Comma-separated language codes; all by default"
+    ),
+    page: int = Query(1, ge=1),
+) -> BookSearchResponse:
+    """Search Gutendex metadata. Selection and structural analysis are separate."""
+    q = q.strip() if q else None
+    isbn = isbn.strip() if isbn else None
+    if not any((q, isbn, gutenberg_id)):
+        raise HTTPException(422, detail="Provide a title/author query, ISBN, or Gutenberg ID.")
+    try:
+        return await client.list_books(
+            query=q, isbn=isbn, gutenberg_id=gutenberg_id, language=language, page=page
+        )
+    except GutendexUnavailableError as exc:
+        raise HTTPException(
+            status_code=504 if exc.timed_out else 502,
+            detail={"error": "gutendex_unreachable", "message": exc.reason},
+        ) from exc
 
 
 def _validate_detail(detail: str) -> None:
@@ -216,6 +248,16 @@ async def get_book_structure(
             detail={"error": "gutendex_unreachable", "message": exc.reason},
         ) from exc
 
+    except UnsupportedFormatError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "unsupported_format",
+                "message": "This Gutendex book has no text or HTML format for structural analysis.",
+                "gutenberg_id": exc.gutenberg_id,
+            },
+        ) from exc
+
     # A book was selected from the search results — persist it (unscanned)
     # so a later text-fetch failure still leaves a record behind.
     store = get_upload_store()
@@ -243,14 +285,9 @@ async def get_book_structure(
         text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
     )
 
-    # The scan ran — mark the stored document as scanned with its results.
-    await store.record_scan(
-        book_info.gutenberg_id, scan_update_doc(schema, detail, summary, encoder)
-    )
-
     processing_ms = int((time.monotonic() - t0) * 1000)
 
-    return BookStructureResponse(
+    response = BookStructureResponse(
         book=book_info,
         structure=StructureDetail(
             **{"schema": schema.name.value, **schema.explanation()},
@@ -265,6 +302,10 @@ async def get_book_structure(
             tokenizer=_tokenizer_info(encoder),
         ),
     )
+    scan_set = scan_update_doc(schema, detail, summary, encoder)
+    scan_set["result"] = response.model_dump(mode="json", by_alias=True)
+    response.record_id = await store.record_scan(book_info.gutenberg_id, scan_set)
+    return response
 
 
 @router.post(
@@ -351,17 +392,16 @@ async def upload_book(
         language=parsed.metadata.language,
         subjects=parsed.metadata.subjects,
         isbn=parsed.metadata.isbn,
+        publisher=parsed.metadata.publisher,
+        license=parsed.metadata.license,
+        date=parsed.metadata.date,
+        number_of_pages=parsed.metadata.number_of_pages,
     )
     blob_info = BlobInfo(url=blob.url, pathname=blob.pathname, size_bytes=blob.size)
 
-    # ── 4. Persist the upload document (metadata + scan results, never the tree)
-    await get_upload_store().record_upload(
-        upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
-    )
-
     processing_ms = int((time.monotonic() - t0) * 1000)
 
-    return BookUploadResponse(
+    response = BookUploadResponse(
         book=uploaded_book,
         blob=blob_info,
         structure=StructureDetail(
@@ -377,6 +417,12 @@ async def upload_book(
             tokenizer=_tokenizer_info(encoder),
         ),
     )
+    # PostgreSQL commits relationships and the public structural result together.
+    # MongoDB retains its historical summary-only representation.
+    doc = upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
+    doc["result"] = response.model_dump(mode="json", by_alias=True)
+    response.record_id = await get_upload_store().record_upload(doc)
+    return response
 
 
 @router.get(
@@ -391,11 +437,22 @@ async def list_uploads(
     ),
 ) -> list[UploadRecord]:
     """
-    List the documents persisted in the `uploads` collection — one per book
+    List the persisted library — one record per book
     uploaded or selected from search results, newest first. Each carries the
     book metadata, the Vercel Blob link (uploads), and the current scan state
-    (scanned, scope, schema, total tokens). Requires MONGODB_URI to be set;
-    returns an empty list otherwise.
+    (scanned, scope, schema, total tokens). PostgreSQL uses DATABASE_URL;
+    historical MongoDB storage uses MONGODB_URI. Unconfigured storage returns [].
     """
     docs = await get_upload_store().list_uploads(limit=limit, source=source)
     return [UploadRecord.model_validate(doc) for doc in docs]
+
+
+@router.get(
+    "/uploads/{book_id}/structure", response_model=BookUploadResponse | BookStructureResponse
+)
+async def stored_structure(book_id: str):
+    """Open a committed scan from PostgreSQL without fetching or exposing book text."""
+    result = await get_upload_store().get_result(book_id)
+    if result is None:
+        raise HTTPException(404, detail={"error": "saved_result_not_found"})
+    return result
