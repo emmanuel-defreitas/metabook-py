@@ -6,10 +6,13 @@ publish = false
 description = "GPUI desktop example client for the Book Structure API"
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", features = ["tree-sitter"] }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "a3f7bb2673ea82fed19921f87edcf1eef1f37bee", features = ["tree-sitter"] }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "a3f7bb2673ea82fed19921f87edcf1eef1f37bee" }
+ely-gpui-component = { git = "https://github.com/ZacharyZhang-NY/Ely-GPUI-Components" }
+# Same GPUI revision Ely pins. Another revision is a different crate, so the
+# title bar's types would not match this window.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1a28cff4b409169bac058bca40dfbfeb7621d19b" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1a28cff4b409169bac058bca40dfbfeb7621d19b", features = ["font-kit"] }
 gpui-motion = "0.1"
 serde_json = "1"
 ureq = "2"
@@ -17,12 +20,26 @@ ureq = "2"
 [dev-dependencies]
 # test-support enables gpui's TestAppContext / simulated input, used by the
 # interaction tests in tests/.
-gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1a28cff4b409169bac058bca40dfbfeb7621d19b", features = ["test-support"] }
 
-# gpui-motion / gpui-navigator depend on the crates.io `gpui`; point them at
-# the same zed git checkout the rest of the stack uses so types unify.
+# gpui-motion depends on the crates.io `gpui`, and gpui-component depends on
+# an unpinned zed checkout. Both must resolve to Ely's revision or TitleBar
+# and the rest of the window are different crates.
 [patch.crates-io]
-gpui = { git = "https://github.com/zed-industries/zed" }
+gpui = { path = ".gpui/crates/gpui", version = "=0.2.2" }
+
+# Cargo refuses to patch a git repo onto another revision of itself, and
+# gpui-component floats on zed main. This checkout is Ely's pin, so the
+# title bar and the rest of the window are one gpui.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { path = ".gpui/crates/gpui", version = "=0.2.2" }
+gpui_platform = { path = ".gpui/crates/gpui_platform" }
 
 [profile.dev]
 debug = "limited"
+
+# gpui-component's inspector is compiled whenever debug assertions are on,
+# and its callback no longer matches Ely's GPUI pin. The rest of the crate
+# does. Leave assertions on for this app.
+[profile.dev.package.gpui-component]
+debug-assertions = false

@@ -17,17 +17,26 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from metabook_py.core.config import settings
 from metabook_py.core.version import package_version
 from metabook_py.routers.books import router as books_router
+from metabook_py.services.postgres import PersistenceError
+from metabook_py.services.store import get_upload_store, reset_upload_store
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ANN201
-    yield
+    store = get_upload_store()
+    await store.initialize()
+    try:
+        yield
+    finally:
+        await store.close()
+        reset_upload_store()
     # Graceful shutdown: flush in-memory cache so tests don't bleed state
     from metabook_py.core.cache import book_text_cache
 
@@ -61,15 +70,28 @@ app.add_middleware(
 app.include_router(books_router, prefix="/api")
 
 
+@app.exception_handler(PersistenceError)
+async def persistence_error_handler(request, exc: PersistenceError):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": {"error": "database_unavailable", "message": str(exc)}},
+    )
+
+
 @app.get("/health", tags=["meta"])
 async def health() -> dict:
-    """Liveness probe."""
+    """Readiness probe, including configured PostgreSQL connectivity."""
     from metabook_py.core.cache import book_text_cache
 
+    if settings.database_url:
+        await get_upload_store().check_health()
     return {
         "status": "ok",
         "version": app.version,
         "cache_entries": book_text_cache.size,
+        "persistence": "postgresql"
+        if settings.database_url
+        else ("mongodb" if settings.mongodb_uri else "disabled"),
     }
 
 

@@ -1,10 +1,6 @@
 //! Shared presentation and form option constants.
 
-/// Fixed widths keep adjacent form controls stable while the query field grows.
-pub(super) const ISBN_FIELD_WIDTH: f32 = 176.;
-pub(super) const DETAIL_FIELD_WIDTH: f32 = 144.;
-
-/// Options for the detail select, index-aligned with `DETAIL_VALUES`.
+/// Detail choices for structural scans.
 pub(super) const DETAIL_OPTIONS: [&str; 4] = ["Paragraphs", "Sentences", "Clauses", "Words"];
 pub(super) const DETAIL_VALUES: [&str; 4] = ["paragraph", "sentence", "clause", "word"];
 

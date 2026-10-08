@@ -243,14 +243,9 @@ async def get_book_structure(
         text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
     )
 
-    # The scan ran — mark the stored document as scanned with its results.
-    await store.record_scan(
-        book_info.gutenberg_id, scan_update_doc(schema, detail, summary, encoder)
-    )
-
     processing_ms = int((time.monotonic() - t0) * 1000)
 
-    return BookStructureResponse(
+    response = BookStructureResponse(
         book=book_info,
         structure=StructureDetail(
             **{"schema": schema.name.value, **schema.explanation()},
@@ -265,6 +260,10 @@ async def get_book_structure(
             tokenizer=_tokenizer_info(encoder),
         ),
     )
+    scan_set = scan_update_doc(schema, detail, summary, encoder)
+    scan_set["result"] = response.model_dump(mode="json", by_alias=True)
+    response.record_id = await store.record_scan(book_info.gutenberg_id, scan_set)
+    return response
 
 
 @router.post(
@@ -351,17 +350,16 @@ async def upload_book(
         language=parsed.metadata.language,
         subjects=parsed.metadata.subjects,
         isbn=parsed.metadata.isbn,
+        publisher=parsed.metadata.publisher,
+        license=parsed.metadata.license,
+        date=parsed.metadata.date,
+        number_of_pages=parsed.metadata.number_of_pages,
     )
     blob_info = BlobInfo(url=blob.url, pathname=blob.pathname, size_bytes=blob.size)
 
-    # ── 4. Persist the upload document (metadata + scan results, never the tree)
-    await get_upload_store().record_upload(
-        upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
-    )
-
     processing_ms = int((time.monotonic() - t0) * 1000)
 
-    return BookUploadResponse(
+    response = BookUploadResponse(
         book=uploaded_book,
         blob=blob_info,
         structure=StructureDetail(
@@ -377,6 +375,12 @@ async def upload_book(
             tokenizer=_tokenizer_info(encoder),
         ),
     )
+    # PostgreSQL commits relationships and the public structural result together.
+    # MongoDB retains its historical summary-only representation.
+    doc = upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
+    doc["result"] = response.model_dump(mode="json", by_alias=True)
+    response.record_id = await get_upload_store().record_upload(doc)
+    return response
 
 
 @router.get(
@@ -391,11 +395,22 @@ async def list_uploads(
     ),
 ) -> list[UploadRecord]:
     """
-    List the documents persisted in the `uploads` collection — one per book
+    List the persisted library — one record per book
     uploaded or selected from search results, newest first. Each carries the
     book metadata, the Vercel Blob link (uploads), and the current scan state
-    (scanned, scope, schema, total tokens). Requires MONGODB_URI to be set;
-    returns an empty list otherwise.
+    (scanned, scope, schema, total tokens). PostgreSQL uses DATABASE_URL;
+    historical MongoDB storage uses MONGODB_URI. Unconfigured storage returns [].
     """
     docs = await get_upload_store().list_uploads(limit=limit, source=source)
     return [UploadRecord.model_validate(doc) for doc in docs]
+
+
+@router.get(
+    "/uploads/{book_id}/structure", response_model=BookUploadResponse | BookStructureResponse
+)
+async def stored_structure(book_id: str):
+    """Open a committed scan from PostgreSQL without fetching or exposing book text."""
+    result = await get_upload_store().get_result(book_id)
+    if result is None:
+        raise HTTPException(404, detail={"error": "saved_result_not_found"})
+    return result

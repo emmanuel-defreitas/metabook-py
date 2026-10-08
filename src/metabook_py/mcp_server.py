@@ -22,6 +22,8 @@ call:
 
 import base64
 import binascii
+import time
+from datetime import UTC, datetime
 
 import httpx
 from fastmcp import FastMCP
@@ -87,6 +89,7 @@ async def search_book_structure(
     """
     if not any([title, isbn, gutenberg_id]):
         return {"error": "Provide at least one of: title, isbn, gutenberg_id."}
+    t0 = time.monotonic()
     if detail not in DETAIL_LEVELS:
         return {"error": "invalid_detail", "allowed": list(DETAIL_LEVELS)}
 
@@ -144,9 +147,7 @@ async def search_book_structure(
         text, schema, include_paragraphs=include_paragraphs, detail=detail
     )
 
-    await store.record_scan(book_info.gutenberg_id, scan_update_doc(schema, detail, summary, None))
-
-    return {
+    result = {
         "book": book_info.model_dump(),
         "structure": {
             "schema": schema.name.value,
@@ -157,6 +158,17 @@ async def search_book_structure(
         },
         "cached": was_cached,
     }
+    scan = scan_update_doc(schema, detail, summary, None)
+    scan["result"] = {
+        **result,
+        "meta": {
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "cached": was_cached,
+            "processing_time_ms": int((time.monotonic() - t0) * 1000),
+        },
+    }
+    result["record_id"] = await store.record_scan(book_info.gutenberg_id, scan)
+    return result
 
 
 @mcp.tool()
@@ -191,6 +203,7 @@ async def upload_book_epub(
     """
     if (epub_base64 is None) == (epub_url is None):
         return {"error": "Provide exactly one of: epub_base64, epub_url."}
+    t0 = time.monotonic()
     if detail not in DETAIL_LEVELS:
         return {"error": "invalid_detail", "allowed": list(DETAIL_LEVELS)}
 
@@ -235,12 +248,12 @@ async def upload_book_epub(
         language=parsed.metadata.language,
         subjects=parsed.metadata.subjects,
         isbn=parsed.metadata.isbn,
+        publisher=parsed.metadata.publisher,
+        license=parsed.metadata.license,
+        date=parsed.metadata.date,
+        number_of_pages=parsed.metadata.number_of_pages,
     )
-    await get_upload_store().record_upload(
-        upload_doc(uploaded_book, blob, schema, detail, summary, None)
-    )
-
-    return {
+    result = {
         "book": {
             "source": "upload",
             "title": parsed.metadata.title,
@@ -259,6 +272,18 @@ async def upload_book_epub(
         },
         "spine_document_count": parsed.spine_document_count,
     }
+    doc = upload_doc(uploaded_book, blob, schema, detail, summary, None)
+    doc["result"] = {
+        **result,
+        "book": uploaded_book.model_dump(mode="json"),
+        "meta": {
+            "uploaded_at": datetime.now(UTC).isoformat(),
+            "spine_document_count": parsed.spine_document_count,
+            "processing_time_ms": int((time.monotonic() - t0) * 1000),
+        },
+    }
+    result["record_id"] = await get_upload_store().record_upload(doc)
+    return result
 
 
 @mcp.tool()

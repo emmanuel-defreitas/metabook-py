@@ -24,6 +24,10 @@ class UploadedBookInfo(BaseModel):
     language: str = "en"
     subjects: list[str] = Field(default_factory=list)
     isbn: str | None = None
+    publisher: str | None = None
+    license: str | None = None
+    date: str | None = None
+    number_of_pages: int | None = Field(None, ge=0)
 
 
 class BlobInfo(BaseModel):

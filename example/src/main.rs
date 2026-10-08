@@ -5,34 +5,46 @@
 
 mod api;
 mod app;
+mod theme;
 
 use std::borrow::Cow;
 
+use ely_gpui_component::theme::ActiveTheme as _;
 use gpui::{
-    point, px, size, App, AppContext as _, AssetSource, Result, SharedString, TitlebarOptions,
+    px, size, App, AppContext as _, AssetSource, Result, SharedString, TitlebarOptions,
     WindowOptions,
 };
-use gpui_component::{Root, Theme, TitleBar};
+use gpui_component::Root;
 
 use crate::app::MetabookApp;
 
-/// The component library's embedded icons, plus this app's own. Custom SVGs
-/// live under `assets/` and are compiled in; anything we don't carry falls
-/// through to `gpui_component_assets`.
+const CUSTOM_ICON: &str = "icons/document-magnifying-glass.svg";
+
+/// This app's own icons, then Ely's, then gpui-component's. GPUI takes one
+/// asset source, and Ely's `init` panics unless `icons/check.svg` loads
+/// through it, so anything we don't carry falls through.
 struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        match path {
-            "icons/document-magnifying-glass.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+        if path == CUSTOM_ICON {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/document-magnifying-glass.svg"
-            )))),
-            _ => gpui_component_assets::Assets.load(path),
+            ))));
         }
+        if let Some(asset) = ely_gpui_component::Assets.load(path)? {
+            return Ok(Some(asset));
+        }
+        gpui_component_assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        gpui_component_assets::Assets.list(path)
+        let mut assets = ely_gpui_component::Assets.list(path)?;
+        assets.extend(gpui_component_assets::Assets.list(path)?);
+        if CUSTOM_ICON.starts_with(path) {
+            assets.push(CUSTOM_ICON.into());
+        }
+        Ok(assets)
     }
 }
 
@@ -41,33 +53,34 @@ fn main() {
         .with_assets(Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
-
-            // Rounder controls app-wide: buttons, inputs, selects, and cards
-            // all read the theme radius, so one token bump rounds the whole
-            // system instead of per-call-site overrides. `radius` is the
-            // rounded-xl step (12px) and `radius_lg` keeps dialogs and
-            // notifications one step rounder. This survives light/dark
-            // switches because the default theme configs set no radius; the
-            // sync pushes the new radius down to Base-owned scrollbars.
-            {
-                let theme = Theme::global_mut(cx);
-                theme.radius = px(14.);
-                theme.radius_lg = px(18.);
-            }
-            Theme::sync_base(cx);
+            ely_gpui_component::init(cx).expect("Ely failed to start");
+            theme::init(cx);
+            // This single-window bundle must exit so its launcher can stop the
+            // owned API and Finder can launch a fresh window next time.
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            let traffic_light_origin = cx.theme().traffic_light_origin();
 
             cx.spawn(async move |cx| {
-                // No native title bar: the in-app TitleBar owns dragging,
-                // double-click zoom, and the traffic-light inset.
-                let title_bar_options = Option::Some(TitlebarOptions {
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(24.), px(24.))),
-                    title: None,
-                });
+                // No native title bar: Ely's TitleBar owns dragging and
+                // double-click zoom. AppKit must not treat the bar as a system
+                // move region, or macOS handles the double-click itself and
+                // delays clicks while it disambiguates. The traffic lights sit
+                // where Ely leaves room for them.
                 let options = WindowOptions {
-                    window_min_size: Some(size(px(560.), px(440.))),
-                    titlebar: title_bar_options,
-                    ..TitleBar::window_options()
+                    window_min_size: Some(size(px(960.), px(640.))),
+                    titlebar: Some(TitlebarOptions {
+                        appears_transparent: true,
+
+                        traffic_light_position: Some(traffic_light_origin),
+                        title: None,
+                    }),
+                    app_owns_titlebar_drag: true,
+                    ..Default::default()
                 };
                 cx.open_window(options, |window, cx| {
                     let app = cx.new(|cx| MetabookApp::new(window, cx));

@@ -1,17 +1,29 @@
 # Metabook desktop example (GPUI)
 
-A small [GPUI](https://www.gpui.rs) / [gpui-component](https://github.com/longbridge/gpui-component) desktop client for the Book Structure API in this repository.
+An [Ely](https://elygpui.com) native client for the Book Structure API, with the library and book-detail layout from the metaBook Sketch document. The retained JSON editor and lazy structure tree use gpui-component through an Ely theme bridge.
 
-The window is a sidebar workspace: the sidebar (collapsible to an icon rail) holds the app identity and the **Dashboard** destination, and the work area is the Dashboard until a scan finishes.
+The shared toolbar accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Upload EPUB opens the native file picker; select a file and press **Analyze**, or drop an EPUB onto the upload area.
 
-- **Search** — title/author (fuzzy, via Gutendex) or ISBN
-- **Upload EPUB** — drag a file onto the drop zone, or pick one with the native file picker; either way it posts to `/api/books/upload`
-- **Explore** — a cover grid of every book the API has persisted (`/api/books/uploads`); Gutenberg books show their cover and re-scan when clicked, uploaded EPUBs show a placeholder because their file lives in private blob storage
-- **Tokens** — pick a Hugging Face tokenizer from the dropdown (default `bert-base-uncased`) and every node in the tree shows a token count alongside its word count; choose “No tokens” and none are requested
+- **Library** — compact rows from `/api/books/uploads`, with actual authors, format, structural counts, and scan confidence. Scanned rows reopen their saved PostgreSQL result.
+- **Explore** — All books, Theology, Philosophy, and A.I. filter persisted book subjects.
+- **Book metadata & structure** — bibliographic and source metadata, schema classification, totals, averages, detection evidence, and candidate scores. Missing fields remain explicit.
+- **Structure explorer** — expand the lazy tree and select a node to inspect its JSON fields. **Full JSON** opens the read-only highlighted editor; **Copy JSON** copies the complete API result.
+- **Scan options** — detail level and tokenizer, defaulting to sentence detail and `bert-base-uncased`. Light/dark mode uses the shared Ely palette.
 
-Any path shows a processing view while the API fetches and scans the document, then presents the returned structural schema as code (selectable, copyable JSON). The sidebar's Dashboard item takes you back.
+The brand or **Library** action returns to the saved books. Book text is never returned in the result.
 
 ## Run
+
+Prepare the pinned GPUI source checkout once from the repository root. Cargo's
+local patches unify Ely and the retained gpui-component widgets on this revision:
+
+```bash
+git clone --filter=blob:none --no-checkout https://github.com/zed-industries/zed example/.gpui
+git -C example/.gpui checkout 1a28cff4b409169bac058bca40dfbfeb7621d19b
+```
+
+The checkout is ignored by Git. If `example/.gpui` already exists, verify its HEAD
+matches that revision before building.
 
 Start the API from the repository root, then run the app:
 
@@ -33,8 +45,20 @@ The first build compiles GPUI from source and takes a while.
 
 ## Optional: run as a macOS app bundle
 
-`Metabook.app` is a minimal bundle wrapper (an `Info.plist` plus the app icon in `Contents/Resources/AppIcon.icns`, exported from the project's Sketch logo) so the app has a real bundle identity — useful for macOS permission prompts, Finder launching, and a proper Dock icon. Copy the built binary into it:
+Build the development app bundle from the repository root:
 
 ```bash
-cargo build && cp -f target/debug/metabook-example Metabook.app/Contents/MacOS/ && open Metabook.app
+bash example/build-app.sh
+open example/Metabook.app
 ```
+
+The bundle launcher starts the local Python API if port 8001 is not already
+healthy, waits for readiness, and stops that API when the app exits. Run `uv sync`
+first and configure `DATABASE_URL` and `BLOB_READ_WRITE_TOKEN` in the repository's
+ignored `.env.local`. Existing APIs and remote `METABOOK_API` instances are reused.
+Logs are in `~/Library/Logs/Metabook/app.log` and `api.log`.
+
+This is a development bundle tied to this checkout and its `.venv`; moving it to
+another machine requires that checkout and Python dependencies. Credentials are
+not copied into the bundle. The API stores related metadata and structural results
+in PostgreSQL, and confirms success only after the transaction commits.

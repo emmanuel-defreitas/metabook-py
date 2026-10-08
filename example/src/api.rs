@@ -35,6 +35,7 @@ fn read_body(resp: ureq::Response) -> Result<String, String> {
 /// A successful structural analysis, ready for presentation.
 pub struct Analysis {
     pub title: String,
+    pub value: Value,
     /// Pretty-printed JSON of the full API response, including schema_score,
     /// schema_evidence and schema_candidates. These are heuristic rule support
     /// and structural counts, not probabilities or source-text excerpts.
@@ -80,6 +81,35 @@ pub struct BookMatch {
 pub enum SearchOutcome {
     Analysis(Analysis),
     Matches(Vec<BookMatch>),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SearchInput {
+    Title(String),
+    Isbn(String),
+    Gutenberg(u64),
+}
+
+/// A single field accepts all three identifiers, including hyphenated ISBNs.
+pub fn search_input(input: &str) -> SearchInput {
+    let input = input.trim();
+    let compact: String = input
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect();
+    if (compact.len() == 10 || compact.len() == 13)
+        && compact.chars().enumerate().all(|(i, c)| {
+            c.is_ascii_digit() || (i == 9 && compact.len() == 10 && matches!(c, 'x' | 'X'))
+        })
+    {
+        return SearchInput::Isbn(compact.to_uppercase());
+    }
+    if let Ok(id) = input.trim_start_matches('#').parse::<u64>() {
+        if id > 0 {
+            return SearchInput::Gutenberg(id);
+        }
+    }
+    SearchInput::Title(input.to_string())
 }
 
 /// GET /api/books/structure — search Project Gutenberg by title/author or ISBN.
@@ -141,7 +171,7 @@ pub fn fetch_by_id(
 /// Blob link and scan state kept by the API.
 #[derive(Clone)]
 pub struct LibraryBook {
-    /// Stable document id (MongoDB ObjectId string) — used for element ids.
+    /// Stable database record id — used for element ids and saved results.
     pub id: String,
     /// Set for books resolved from Project Gutenberg; `None` for uploaded
     /// EPUBs, which cannot be re-scanned from an id.
@@ -150,6 +180,7 @@ pub struct LibraryBook {
     /// Gutenberg medium cover URL; uploads carry no cover (the card renders
     /// a placeholder instead).
     pub cover_url: Option<String>,
+    pub record: Value,
 }
 
 /// GET /api/books/uploads — the persisted library, newest first.
@@ -162,6 +193,18 @@ pub fn list_uploads(base: &str) -> Result<Vec<LibraryBook>, String> {
                 .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
             parse_library(&value)
         }
+        Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
+        Err(err) => Err(unreachable_message(base, &err)),
+    }
+}
+
+/// Open an uploaded book's committed structural result without another scan.
+pub fn fetch_upload(base: &str, id: &str) -> Result<Analysis, String> {
+    match ureq::get(&format!("{base}/api/books/uploads/{id}/structure"))
+        .timeout(TIMEOUT)
+        .call()
+    {
+        Ok(resp) => parse_analysis(resp),
         Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
         Err(err) => Err(unreachable_message(base, &err)),
     }
@@ -211,6 +254,7 @@ fn parse_library(value: &Value) -> Result<Vec<LibraryBook>, String> {
                             .unwrap_or("Untitled")
                             .to_string(),
                         cover_url: entry["gutenberg_id"].as_u64().map(gutenberg_cover_url),
+                        record: entry.clone(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -282,6 +326,7 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
 
     Ok(Analysis {
         title,
+        value,
         schema_json,
         tree,
         ranges,
@@ -439,7 +484,17 @@ fn chapter_node(node: &Value, id: String, leaf_name: &str) -> TreeNode {
     });
     TreeNode {
         label: node_label(node, "Chapter"),
-        meta: String::new(),
+        meta: {
+            let mut counts = format!(
+                "{} · {}",
+                count(node["paragraph_count"].as_u64().unwrap_or(0), "paragraph"),
+                count(node["total_words"].as_u64().unwrap_or(0), "word")
+            );
+            if let Some(tokens) = node["total_tokens"].as_u64() {
+                counts.push_str(&format!(" · {}", count(tokens, "token")));
+            }
+            counts
+        },
         children,
         id,
     }
@@ -633,6 +688,35 @@ fn unreachable_message(base: &str, err: &ureq::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chapter_rows_show_their_summary_and_optional_tokens() {
+        let node = serde_json::json!({"label":"Chapter 1","paragraph_count":2,"total_words":40,"total_tokens":50});
+        assert_eq!(
+            super::chapter_node(&node, "n0".into(), "Paragraph").meta,
+            "2 paragraphs · 40 words · 50 tokens"
+        );
+    }
+
+    #[test]
+    fn unified_search_distinguishes_title_isbn_and_gutenberg_id() {
+        use super::{search_input, SearchInput};
+        assert_eq!(
+            search_input("Pride and Prejudice"),
+            SearchInput::Title("Pride and Prejudice".into())
+        );
+        assert_eq!(
+            search_input("978-0-14-143951-8"),
+            SearchInput::Isbn("9780141439518".into())
+        );
+        assert_eq!(
+            search_input("0-8044-2957-x"),
+            SearchInput::Isbn("080442957X".into())
+        );
+        assert_eq!(search_input("#1342"), SearchInput::Gutenberg(1342));
+        assert_eq!(search_input("1342"), SearchInput::Gutenberg(1342));
+        assert_eq!(search_input("0"), SearchInput::Title("0".into()));
+    }
+
     use super::*;
     use serde_json::json;
 

@@ -10,6 +10,20 @@ from io import BytesIO
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def isolated_persistence(monkeypatch):
+    """Unit/API tests never connect to a developer's configured database."""
+    from metabook_py.core.config import settings
+    from metabook_py.services.store import reset_upload_store
+
+    monkeypatch.setattr(settings, "database_url", "")
+    monkeypatch.setattr(settings, "mongodb_uri", "")
+    reset_upload_store()
+    yield
+    reset_upload_store()
+
+
 STANDARD_BOOK = """
 *** START OF THE PROJECT GUTENBERG EBOOK PRIDE AND PREJUDICE ***
 

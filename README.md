@@ -124,14 +124,49 @@ export BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
 
 If the project is linked to Vercel, `vercel env pull` writes the token to `.env.local` (gitignored), which the app loads automatically — values there override `.env`.
 
-### Uploads collection (MongoDB, optional)
+### PostgreSQL storage
+
+Set `DATABASE_URL` in `.env.local` (gitignored) to persist metadata and complete
+structural results. The desktop app sends uploads to the API; database credentials
+stay in the API configuration. Aiven connections retain `sslmode=require`:
+
+```dotenv
+DATABASE_URL="postgres://avnadmin:YOUR_PASSWORD@YOUR_HOST:22637/defaultdb?sslmode=require"
+# Optional owner identifier for this single-user API instance:
+DEFAULT_USER_ID="your-user-id"
+```
+
+API startup creates the additive schema in `public`: `books`, `metadata`, `author`,
+`schemas`, `publisher`, and `license`, plus `metadata_authors` for ordered creators.
+`books` uses quoted `userId`, `metadataId`, and `schemaId` columns; `token` is the
+total token count (null when not requested), and `score` is heuristic detector
+support. `userId` is nullable until an owner is configured; it does not implement
+authentication. `metadata.authorId` points to the first creator, while the join
+table preserves all creators. Publisher, rights/license, publication date, and
+explicit `schema:numberOfPages` EPUB metadata are stored when supplied; unknown
+values remain null. `metadata.LicenseId` is the license relationship.
+
+Metadata, relationships, and the structural JSON commit in one transaction.
+The database does not store extracted source prose. Uploaded EPUB files remain
+in the existing private Vercel Blob store. A failed PostgreSQL write returns 503
+instead of reporting a successful save. A successful response includes `record_id`;
+`GET /api/books/uploads/{record_id}/structure` reopens its committed result.
+`GET /health` verifies the configured database connection.
+
+Real database tests use an isolated temporary schema and remove it afterward:
+
+```bash
+TEST_DATABASE_URL='postgres://...' uv run pytest tests/test_postgres.py -m integration
+```
+
+### Legacy uploads collection (MongoDB, optional)
 
 Every book a user uploads or selects from search results is persisted as a
 document in a MongoDB `uploads` collection: the book metadata, format
 (`epub`), the Vercel Blob link, and the scan state (scanned yet, last
 scanned, scope, schema, total token count). The structure tree itself is
 never stored. Set `MONGODB_URI` to enable (empty = disabled, no behavior
-change); re-selecting the same Gutenberg book updates its document instead
+change). `DATABASE_URL` takes precedence when both are configured. Re-selecting the same Gutenberg book updates its document instead
 of duplicating it:
 
 ```bash
@@ -147,8 +182,9 @@ Browse what's stored via `GET /api/books/uploads`.
 | `GET` | `/api/books/structure` | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`, `tokenizer`) |
 | `GET` | `/api/books/structure/schemas` | List the supported structural schemas |
 | `POST` | `/api/books/upload` | Upload an EPUB and analyse it |
-| `GET` | `/api/books/uploads` | List persisted upload documents (needs `MONGODB_URI`) |
-| `GET` | `/health` | Liveness + cache stats |
+| `GET` | `/api/books/uploads` | List saved books (`DATABASE_URL` or legacy `MONGODB_URI`) |
+| `GET` | `/api/books/uploads/{id}/structure` | Reopen a saved PostgreSQL scan |
+| `GET` | `/health` | Database readiness + cache stats |
 
 Interactive OpenAPI docs live at `/api/docs`.
 

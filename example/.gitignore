@@ -1,2 +1,3 @@
 /target
-/Metabook.app/Contents/MacOS/
+/Metabook.app/Contents/MacOS/*
+!/Metabook.app/Contents/MacOS/Metabook

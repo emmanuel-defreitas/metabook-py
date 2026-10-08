@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # every endpoint then behaves exactly as before.
     mongodb_uri: str = ""  # e.g. mongodb://localhost:27017 (MONGODB_URI)
     mongodb_db: str = "metabook"
+    # PostgreSQL takes precedence over MongoDB. Keep credentials in .env.local.
+    database_url: str = ""
+    default_user_id: str | None = None
     app_name: str = "Book Structure API"
     debug: bool = False
 

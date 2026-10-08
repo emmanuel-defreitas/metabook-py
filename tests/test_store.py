@@ -277,6 +277,26 @@ async def test_upload_endpoint_records_upload_document(
 
 
 @respx.mock
+async def test_upload_does_not_confirm_success_when_database_save_fails(
+    client, blob_token, fake_store, monkeypatch
+):
+    from metabook_py.services.postgres import PersistenceError
+
+    async def fail_save(doc):
+        raise PersistenceError("The database operation failed. No successful save was confirmed.")
+
+    monkeypatch.setattr(fake_store, "record_upload", fail_save)
+    _mock_blob_ok()
+    response = await client.post(
+        "/api/books/upload",
+        files={"file": ("pride.epub", build_epub(), "application/epub+zip")},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"] == "database_unavailable"
+    assert "record_id" not in response.json()
+
+
+@respx.mock
 async def test_structure_endpoint_records_book_then_scan(client, fake_store):
     _mock_gutendex_single(999001)
     _mock_gutenberg_text(999001)
