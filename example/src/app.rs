@@ -130,6 +130,8 @@ pub struct MetabookApp {
     phase: Phase,
     library: Library,
     covers: HashMap<SharedString, Cover>,
+    /// Shared, theme-colored portrait icon for recent books without a cover.
+    preview_placeholder: (gpui::Hsla, Arc<Image>),
     /// Incremented per request; responses for an older index are discarded.
     request_ix: usize,
     /// True briefly after Copy JSON, driving the button's success feedback.
@@ -192,6 +194,7 @@ impl MetabookApp {
             phase: Phase::Idle,
             library: Library::Loading,
             covers: HashMap::new(),
+            preview_placeholder: home::book_placeholder(cx),
             request_ix: 0,
             copied: false,
             expand_gen: 0,
@@ -752,12 +755,12 @@ impl MetabookApp {
     /// The work area. Idle shows the library (its own scroll owner, so the
     /// scrollbar sits at the panel edge); every other phase is a page inside
     /// the shared content inset.
-    fn render_content(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_content(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
         match &self.phase {
-            Phase::Idle => self.render_home(cx),
+            Phase::Idle => self.render_home(window, cx),
             Phase::Processing {
                 home_view: true, ..
-            } => self.render_home(cx),
+            } => self.render_home(window, cx),
             Phase::Processing {
                 message,
                 detail_loading: true,
@@ -1031,6 +1034,9 @@ impl MetabookApp {
 impl Render for MetabookApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::theme::synchronize(cx);
+        if self.preview_placeholder.0 != cx.theme().colors.fg_muted {
+            self.preview_placeholder = home::book_placeholder(cx);
+        }
         let content = v_flex()
             .size_full()
             .font_family(cx.theme().font_family.clone())
@@ -1060,7 +1066,7 @@ impl Render for MetabookApp {
                             .min_h_0()
                             .min_w_0()
                             .text_color(cx.theme().colors.fg)
-                            .child(self.render_content(cx)),
+                            .child(self.render_content(window, cx)),
                     ),
             )
             .children(Root::render_dialog_layer(window, cx))

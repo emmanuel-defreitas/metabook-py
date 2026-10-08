@@ -5,12 +5,20 @@ The development bundle runs against its local API and the configured Aiven Postg
 
 ## Behavior
 
-- Home has no toolbar, sidebar or master/detail panels. It presents the logo/name, large Ely SearchInput, EPUB DropZone, and RecentFiles/FilePreview metadata cards from the past seven days.
+- Home has no toolbar, sidebar or master/detail panels. It presents the logo/name, large Ely SearchInput, EPUB DropZone, and a responsive grid of FilePreview cover cards from the past seven days.
 - The pinned library exports the documented drag/drop behavior as `forms::DropZone`; it has no `DragDropFiles` type. Its native picker and external-file target share the same upload callback.
 - Uploads show a Banner and FileOperationProgress. Byte counts measure the multipart request consumed by the HTTP client. After transfer, the banner reports parsing while waiting for the API result; the API provides no parser percentage.
-- Recents filter recorded created/updated/scan timestamps, sort newest first, and exclude missing, malformed and future timestamps. Their JSON previews contain author/schema/counts, without book prose.
+- Recents filter recorded created/updated/scan timestamps, sort newest first, and exclude missing, malformed and future timestamps. Their portrait previews show real cached covers or themed book icons. Captions describe the saved metadata JSON and its actual size, without book prose.
 - Book detail uses NetworkGraph with metadata and structural relationships. Named controls navigate because the pinned graph supports hover/drag, but has no node-click callback. Twelve-child pages cover the complete structure; structural navigation synchronizes the lazy tree and JSON selection.
 - Ely skeletons appear while saved or selected Gutenberg books open. ResultView displays success after structural response validation, or failure with a Return to library action.
+
+## Markup adjustments — 2026-10-08
+
+- Reduced the home mark from 3.5 rem to 2 rem and the name from 1.25× Display to the theme's Xxl text size.
+- Removed the nested search/drop wrappers and their padding. Search and drop now share a zero-gap stack.
+- Replaced full-width recent rows and repeated JSON snippets with Ely FilePreview cards in SimpleGrid. Covers and missing-cover icons share a 2:3 ratio; the existing Gutenberg cover cache is reused. Missing-cover SVGs are cached per theme color.
+- Cards retain the seven-day filter and saved-result opening, with Tab, Enter/Space, a visible focus ring, and button accessibility labels.
+- Native checks at 1505 px and the app's 960 px minimum width showed three correctly sized portrait columns, a loaded Pride and Prejudice cover, and missing-cover icons. Light/dark checks confirmed themed placeholders. Tab from Search through Browse to the first preview, then Enter, reopened its saved structure with HTTP 200.
 
 ## Automated checks
 

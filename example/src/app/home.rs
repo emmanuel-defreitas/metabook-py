@@ -1,16 +1,15 @@
 //! A single home canvas: identifiers, EPUB intake, and persisted recent results.
-use super::{Library, MetabookApp, Phase};
+use super::{Cover, Library, MetabookApp, Phase};
 use crate::api::LibraryBook;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant},
     feedback::Banner,
-    files::{
-        FileOperation, FileOperationProgress, FilePreview, RecentFile, RecentFiles, TransferState,
-    },
+    files::{FileOperation, FileOperationProgress, FilePreview, TransferState},
     forms::{DropZone, SearchInput},
+    layout::SimpleGrid,
     lists::DirEntry,
     motion::SkeletonCard,
-    primitives::Severity,
+    primitives::{FocusRing as _, Severity},
     theme::{ActiveTheme as _, ControlSize, Radius, TextSize},
 };
 use gpui::prelude::FluentBuilder as _;
@@ -22,8 +21,31 @@ use gpui::{
 use gpui_component::{h_flex, v_flex};
 use jiff::Timestamp;
 use serde_json::Value;
+use std::sync::Arc;
 
 const WEEK: i64 = 7 * 24 * 60 * 60;
+const BOOK_RATIO: f32 = 2.0 / 3.0;
+
+/// FilePreview's default icon well is landscape. A cached SVG keeps both
+/// loaded covers and missing-cover icons in the same portrait book shape.
+pub(super) fn book_placeholder(cx: &gpui::App) -> (gpui::Hsla, Arc<gpui::Image>) {
+    let color = cx.theme().colors.fg_muted;
+    let rgb = color.to_rgb();
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300"><g transform="translate(76 126) scale(2)" fill="none" stroke="rgb({:.0},{:.0},{:.0})" opacity="{}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14m0-14C9 5 5 4 2 5v14c4-1 7 0 10 2m0-14c3-2 7-3 10-2v14c-4-1-7 0-10 2"/></g></svg>"#,
+        rgb.r * 255.,
+        rgb.g * 255.,
+        rgb.b * 255.,
+        color.a,
+    );
+    (
+        color,
+        Arc::new(gpui::Image::from_bytes(
+            gpui::ImageFormat::Svg,
+            svg.into_bytes(),
+        )),
+    )
+}
 
 /// Use recorded activity only; missing, malformed and future dates stay out.
 fn recent_at(record: &Value, now: Timestamp) -> Option<Timestamp> {
@@ -39,7 +61,7 @@ fn recent_at(record: &Value, now: Timestamp) -> Option<Timestamp> {
 }
 
 impl MetabookApp {
-    pub(super) fn render_home(&self, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn render_home(&self, window: &gpui::Window, cx: &Context<Self>) -> AnyElement {
         let this = cx.entity();
         let drop = DropZone::new("home-epub-drop")
             .kinds(&["epub"])
@@ -74,38 +96,31 @@ impl MetabookApp {
                             .max_w(rems(58.))
                             .px_8()
                             .py_16()
-                            .gap_9()
+                            .gap_6()
                             .child(
                                 h_flex()
-                                    .gap_4()
+                                    .gap_3()
                                     .items_center()
                                     .child(
                                         svg()
                                             .path("icons/metabook-mark.svg")
-                                            .size(rems(3.5))
+                                            .size(rems(2.))
                                             .text_color(cx.theme().colors.accent),
                                     )
                                     .child(
                                         div()
-                                            .text_size(
-                                                cx.theme().text_size(TextSize::Display) * 1.25,
-                                            )
+                                            .text_size(cx.theme().text_size(TextSize::Xxl))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child("metaBook"),
                                     ),
                             )
                             .child(
-                                div()
-                                    .p_2()
-                                    .rounded(cx.theme().radius(Radius::Xl))
-                                    .bg(cx.theme().colors.sunken)
+                                v_flex()
+                                    .gap_0()
                                     .child(
                                         h_flex()
                                             .gap_3()
-                                            .p_3()
                                             .items_center()
-                                            .rounded(cx.theme().radius(Radius::Lg))
-                                            .bg(cx.theme().colors.surface)
                                             .child(
                                                 div().flex_1().min_w_0().child(
                                                     SearchInput::new("home-search", &self.query)
@@ -124,19 +139,10 @@ impl MetabookApp {
                                                         },
                                                     )),
                                             ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .p_2()
-                                    .rounded(cx.theme().radius(Radius::Xl))
-                                    .bg(cx.theme().colors.sunken)
-                                    .opacity(if self.is_processing() { 0.55 } else { 1. })
+                                    )
                                     .child(
                                         div()
-                                            .p_2()
-                                            .rounded(cx.theme().radius(Radius::Lg))
-                                            .bg(cx.theme().colors.surface)
+                                            .opacity(if self.is_processing() { 0.55 } else { 1. })
                                             .child(drop),
                                     ),
                             )
@@ -160,7 +166,7 @@ impl MetabookApp {
                                                     .child("Past 7 days"),
                                             ),
                                     )
-                                    .child(self.render_recent_previews(cx)),
+                                    .child(self.render_recent_previews(window, cx)),
                             ),
                     ),
             )
@@ -225,7 +231,7 @@ impl MetabookApp {
             .into_any_element()
     }
 
-    fn render_recent_previews(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_recent_previews(&self, window: &gpui::Window, cx: &Context<Self>) -> AnyElement {
         match &self.library {
             Library::Loading => v_flex()
                 .gap_4()
@@ -258,14 +264,17 @@ impl MetabookApp {
                         .child("No books from the past week. Search or drop an EPUB to begin.")
                         .into_any_element();
                 }
-                v_flex()
-                    .gap_4()
-                    .children(
-                        books
-                            .into_iter()
-                            .map(|(book, date)| self.render_recent_preview(book, date, cx)),
-                    )
-                    .into_any_element()
+                SimpleGrid::new(
+                    "recent-books-grid",
+                    window.rem_size() * 15.,
+                    window.rem_size() * 1.5,
+                )
+                .children(
+                    books
+                        .into_iter()
+                        .map(|(book, date)| self.render_recent_preview(book, date, cx)),
+                )
+                .into_any_element()
             }
         }
     }
@@ -277,27 +286,6 @@ impl MetabookApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let id = book.id.clone();
-        let source = if book.gutenberg_id.is_some() {
-            "Project Gutenberg"
-        } else {
-            "Uploaded EPUB"
-        };
-        let recent = RecentFile {
-            name: book.title.clone().into(),
-            folder: source.into(),
-            opened: date,
-        };
-        let open_id = id.clone();
-        let this = cx.entity();
-        let recent = RecentFiles::new(
-            gpui::ElementId::Name(format!("recent-{id}").into()),
-            [recent],
-        )
-        .on_open(move |_, window, cx| {
-            this.update(cx, |this, cx| {
-                this.select_upload(open_id.clone(), window, cx)
-            })
-        });
         // The preview represents the saved metadata JSON, not the source EPUB.
         let metadata = serde_json::to_vec_pretty(&book.record).unwrap_or_default();
         let name = format!("{}.json", book.title);
@@ -305,27 +293,41 @@ impl MetabookApp {
             gpui::ElementId::Name(format!("preview-{id}").into()),
             DirEntry::file(name, metadata.len() as u64, date),
         )
-        .text(format!(
-            "Author  {}\nSchema  {}\nShape   {} top-level nodes · {} words",
-            super::detail::authors(&book.record["book"]),
-            super::detail::field(&book.record["scan"], "schema"),
-            super::detail::field(&book.record["scan"]["summary"], "total_top_level_nodes"),
-            super::detail::field(&book.record["scan"]["summary"], "total_words")
-        ));
+        .picture(
+            match book
+                .cover_url
+                .as_deref()
+                .and_then(|url| self.covers.get(url))
+            {
+                Some(Cover::Ready(image)) => image.clone(),
+                _ => self.preview_placeholder.1.clone(),
+            },
+            BOOK_RATIO,
+        );
+        let keyboard_id = id.clone();
         div()
             .id(gpui::ElementId::Name(format!("recent-card-{id}").into()))
-            .p_2()
-            .rounded(cx.theme().radius(Radius::Xl))
-            .bg(cx.theme().colors.sunken)
+            .role(gpui::Role::Button)
+            .aria_label(format!("Open {}", book.title))
+            .aria_description(match book.gutenberg_id {
+                Some(id) => format!("Project Gutenberg book {id}. Saved structural schema."),
+                None => "Uploaded EPUB. Saved structural schema.".into(),
+            })
+            .min_w_0()
+            .tab_index(0)
+            .rounded(cx.theme().radius(Radius::Lg))
+            .border_1()
+            .border_color(cx.theme().colors.bg)
+            .focus_ring(cx)
             .cursor_pointer()
-            .child(
-                v_flex()
-                    .gap_4()
-                    .p_4()
-                    .rounded(cx.theme().radius(Radius::Lg))
-                    .bg(cx.theme().colors.surface)
-                    .child(recent)
-                    .child(preview),
+            .child(preview)
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        cx.stop_propagation();
+                        this.select_upload(keyboard_id.clone(), window, cx);
+                    }
+                }),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
