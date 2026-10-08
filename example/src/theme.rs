@@ -28,6 +28,7 @@ pub fn init(cx: &mut App) {
     let mode = Mode::from(cx.window_appearance());
     // Ely initializes Platform::current(); leave that platform policy intact.
     ElyTheme::set_mode_now(mode, cx);
+    ElyTheme::update(cx, |theme| theme.font_family = "IBM Plex Sans".into());
     synchronize(cx);
 }
 

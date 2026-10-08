@@ -19,6 +19,7 @@ use gpui_component::Root;
 use crate::app::MetabookApp;
 
 const CUSTOM_ICON: &str = "icons/document-magnifying-glass.svg";
+const BRAND_MARK: &str = "icons/metabook-mark.svg";
 
 /// This app's own icons, then Ely's, then gpui-component's. GPUI takes one
 /// asset source, and Ely's `init` panics unless `icons/check.svg` loads
@@ -27,6 +28,11 @@ struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == BRAND_MARK {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/metabook-mark.svg"
+            ))));
+        }
         if path == CUSTOM_ICON {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/document-magnifying-glass.svg"
@@ -43,6 +49,9 @@ impl AssetSource for Assets {
         assets.extend(gpui_component_assets::Assets.list(path)?);
         if CUSTOM_ICON.starts_with(path) {
             assets.push(CUSTOM_ICON.into());
+        }
+        if BRAND_MARK.starts_with(path) {
+            assets.push(BRAND_MARK.into());
         }
         Ok(assets)
     }

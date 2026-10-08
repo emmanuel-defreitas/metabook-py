@@ -2,7 +2,7 @@
 
 An [Ely](https://elygpui.com) native client for the Book Structure API, with the library and book-detail layout from the metaBook Sketch document. The retained JSON editor and lazy structure tree use gpui-component through an Ely theme bridge.
 
-The shared toolbar accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Upload EPUB opens the native file picker; select a file and press **Analyze**, or drop an EPUB onto the upload area.
+Home is a single canvas with the metaBook mark, a large Ely `SearchInput`, an EPUB `DropZone`, and recent saved-book previews. Search accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Browse or drop one EPUB to start analysis immediately.
 
 Search browses [Gutendex](https://gutendex.com) metadata through `/api/books/search`,
 including all languages by default. The result count and Previous/Next controls
@@ -11,11 +11,14 @@ that book and save its structure; browsing results does not download or persist
 books. ISBN lookup is a best-effort keyword search because Gutendex does not
 provide an ISBN index.
 
-- **Library** — compact rows from `/api/books/uploads`, with actual authors, format, structural counts, and scan confidence. Scanned rows reopen their saved PostgreSQL result.
-- **Explore** — All books, Theology, Philosophy, and A.I. filter persisted book subjects.
-- **Book metadata & structure** — bibliographic and source metadata, schema classification, totals, averages, detection evidence, and candidate scores. Missing fields remain explicit.
+- **Recents** — Ely `RecentFiles` and `FilePreview` cards for records updated or scanned in the past seven days. Previews show saved metadata JSON and counts, never source prose. Click a card or activate its recent-file row to reopen the committed PostgreSQL result. Missing, invalid, or future activity timestamps are excluded.
+- **Book detail** — an Ely `NetworkGraph` connects the book to metadata, schema, counts, source information, and structural nodes. Drag and hover nodes; use the named node controls to explore relationships and drill into chapters, paragraphs, sentences, and clauses. Pages show at most 12 children, with Previous/Next covering the entire structure. The tree selection also focuses the graph.
+- **Parsing feedback** — Home retains its content while an upload runs: Ely `Banner` and `FileOperationProgress` show actual multipart request bytes, followed by a parsing status while awaiting the committed result. Ely detail skeletons show while a saved book opens or a selected Gutenberg book is analysed. Ely `ResultView` shows success only after a valid structural response arrives; failures show the error and a Return to library action.
 - **Structure explorer** — expand the lazy tree and select a node to inspect its JSON fields. **Full JSON** opens the read-only highlighted editor; **Copy JSON** copies the complete API result.
-- **Scan options** — detail level and tokenizer, defaulting to sentence detail and `bert-base-uncased`. Light/dark mode uses the shared Ely palette.
+
+Bibliographic/source metadata, classification, totals, averages, detection evidence,
+and candidate scores remain below the graph. Missing fields remain explicit.
+The desktop scans at sentence detail with `bert-base-uncased`. Light/dark mode and reduced motion use the shared Ely theme.
 
 The brand or **Library** action returns to the saved books. Book text is never returned in the result.
 

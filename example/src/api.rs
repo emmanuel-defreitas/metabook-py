@@ -7,11 +7,42 @@
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::path::Path;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Multipart request bytes consumed by the HTTP client; parsing has no percent.
+#[derive(Default)]
+pub struct UploadProgress {
+    sent: AtomicU64,
+    total: AtomicU64,
+}
+
+impl UploadProgress {
+    pub fn snapshot(&self) -> (u64, u64) {
+        let total = self.total.load(Ordering::Acquire);
+        (self.sent.load(Ordering::Acquire).min(total), total)
+    }
+}
+
+struct UploadReader {
+    body: std::io::Cursor<Vec<u8>>,
+    progress: Arc<UploadProgress>,
+}
+
+impl std::io::Read for UploadReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.body.read(buffer)?;
+        self.progress.sent.fetch_add(read as u64, Ordering::Release);
+        Ok(read)
+    }
+}
 
 /// ureq's `into_string()` refuses bodies over 10 MB, which deep `detail=`
 /// levels on large books exceed easily; read manually with a far larger cap.
@@ -267,7 +298,13 @@ fn parse_library(value: &Value) -> Result<Vec<LibraryBook>, String> {
 }
 
 /// POST /api/books/upload — upload an EPUB file for analysis.
-pub fn upload(base: &str, path: &Path, detail: &str, tokenizer: &str) -> Result<Analysis, String> {
+pub fn upload(
+    base: &str,
+    path: &Path,
+    detail: &str,
+    tokenizer: &str,
+    progress: Arc<UploadProgress>,
+) -> Result<Analysis, String> {
     let bytes =
         std::fs::read(path).map_err(|err| format!("Couldn't read “{}”: {err}", path.display()))?;
     let filename = path
@@ -276,16 +313,21 @@ pub fn upload(base: &str, path: &Path, detail: &str, tokenizer: &str) -> Result<
         .unwrap_or_else(|| "book.epub".into());
 
     let (body, content_type) = multipart_body(&filename, &bytes);
+    progress.total.store(body.len() as u64, Ordering::Release);
 
     let mut request = ureq::post(&format!("{base}/api/books/upload"))
         .query("include_paragraphs", "true")
         .query("detail", detail)
         .set("Content-Type", &content_type)
+        .set("Content-Length", &body.len().to_string())
         .timeout(TIMEOUT);
     if !tokenizer.is_empty() {
         request = request.query("tokenizer", tokenizer);
     }
-    let result = request.send_bytes(&body);
+    let result = request.send(UploadReader {
+        body: std::io::Cursor::new(body),
+        progress,
+    });
 
     match result {
         Ok(resp) => parse_analysis(resp),
@@ -320,6 +362,22 @@ fn parse_analysis(resp: ureq::Response) -> Result<Analysis, String> {
     let value: Value = serde_json::from_str(&text)
         .map_err(|err| format!("The API returned invalid JSON: {err}"))?;
 
+    analysis_from_value(value)
+}
+
+fn analysis_from_value(value: Value) -> Result<Analysis, String> {
+    if !value["book"].is_object()
+        || value["book"]["title"]
+            .as_str()
+            .is_none_or(|s| s.trim().is_empty())
+        || !value["structure"].is_object()
+        || value["structure"]["schema"]
+            .as_str()
+            .is_none_or(|s| s.trim().is_empty())
+        || !value["structure"]["nodes"].is_array()
+    {
+        return Err("The API response is missing a valid book or structural schema. Please try the book again.".into());
+    }
     let title = value["book"]["title"]
         .as_str()
         .unwrap_or("Untitled")
@@ -442,7 +500,7 @@ fn element_ctx(ctx: &NodeCtx, ix: usize) -> NodeCtx {
 // canonical_scripture leaves are verses; every other schema's leaves are
 // paragraphs. Labels never contain book text.
 
-fn build_tree(structure: &Value) -> Vec<TreeNode> {
+pub(crate) fn build_tree(structure: &Value) -> Vec<TreeNode> {
     let leaf_name = if structure["schema"].as_str() == Some("canonical_scripture") {
         "Verse"
     } else {
@@ -728,6 +786,44 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn upload_progress_counts_consumed_request_bytes_and_stops_at_eof() {
+        let progress = Arc::new(UploadProgress::default());
+        progress.total.store(5, Ordering::Release);
+        let mut reader = UploadReader {
+            body: std::io::Cursor::new(b"12345".to_vec()),
+            progress: progress.clone(),
+        };
+        assert_eq!(progress.snapshot(), (0, 5));
+        assert_eq!(reader.read(&mut [0; 2]).unwrap(), 2);
+        assert_eq!(progress.snapshot(), (2, 5));
+        assert_eq!(reader.read(&mut [0; 8]).unwrap(), 3);
+        assert_eq!(reader.read(&mut [0; 8]).unwrap(), 0);
+        assert_eq!(progress.snapshot(), (5, 5));
+    }
+
+    #[test]
+    fn analysis_rejects_missing_or_malformed_schema_in_valid_json() {
+        for value in [
+            json!({}),
+            json!({"book":{"title":"Book"},"structure":{}}),
+            json!({"book":{"title":"Book"},"structure":{"schema":"standard_book","nodes":{}}}),
+            json!({"book":{"title":"Book"},"structure":{"schema":" ","nodes":[]}}),
+            json!({"book":{"title":7},"structure":{"schema":"standard_book","nodes":[]}}),
+        ] {
+            assert!(analysis_from_value(value).is_err());
+        }
+    }
+
+    #[test]
+    fn analysis_accepts_a_valid_empty_structure_and_future_schema_names() {
+        let value = json!({"book":{"title":"Empty book"},"structure":{"schema":"future_schema","nodes":[]}});
+        let analysis = analysis_from_value(value.clone()).unwrap();
+        assert_eq!(analysis.title, "Empty book");
+        assert_eq!(analysis.value, value);
+        assert!(analysis.tree.is_empty());
+    }
 
     #[test]
     fn search_page_preserves_metadata_and_navigation() {

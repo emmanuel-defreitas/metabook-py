@@ -11,7 +11,11 @@
 
 mod components;
 mod detail;
+mod graph;
+mod graph_data;
 mod helpers;
+mod home;
+mod loading;
 mod methods;
 mod styles;
 
@@ -22,6 +26,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ely_gpui_component::forms::TextInput;
 use ely_gpui_component::layout::AppShell;
 use ely_gpui_component::primitives::FocusScope;
 use ely_gpui_component::shell::TitleBar;
@@ -29,17 +34,17 @@ use ely_gpui_component::theme::{ActiveTheme as _, Mode, Radius, TextSize, Theme 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     div, px, radians, AnyElement, AppContext as _, ClipboardItem, Context, ElementId, Entity,
-    ExternalPaths, HighlightStyle, Image, ImageFormat, InteractiveElement as _, IntoElement,
-    ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _,
-    Styled, Subscription, Window,
+    HighlightStyle, Image, ImageFormat, InteractiveElement as _, IntoElement, ParentElement,
+    PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
+    Window,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{EditorState, InputState, Position, TextDecoration};
+use gpui_component::input::{EditorState, Position, TextDecoration};
 use gpui_component::list::ListItem;
 use gpui_component::select::SelectState;
 use gpui_component::spinner::Spinner;
 use gpui_component::tree::{tree, TreeEvent, TreeState};
-use gpui_component::{h_flex, v_flex, Icon, IconName, Root, Sizable as _, StyledExt as _};
+use gpui_component::{h_flex, v_flex, Icon, IconName, Root, Sizable as _};
 use gpui_motion::{MotionExt as _, Spring, Tween};
 
 use crate::api::{self, LibraryBook, NodeSpan, SearchOutcome, SearchPage, TreeNode};
@@ -51,6 +56,8 @@ enum Phase {
     Idle,
     Processing {
         message: SharedString,
+        detail_loading: bool,
+        home_view: bool,
     },
     /// One page of Gutendex results; selection starts analysis.
     Matches {
@@ -64,6 +71,8 @@ enum Phase {
         ranges: HashMap<String, NodeSpan>,
         /// Node id currently synced to the editor.
         selected_node: Option<String>,
+        graph_focus: graph_data::Focus,
+        graph_page: usize,
         /// Source tree; `TreeItem`s are materialised lazily from this as the
         /// user expands folders, so huge trees cost O(visible), not O(total).
         tree: Rc<Vec<TreeNode>>,
@@ -112,10 +121,9 @@ fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
 pub struct MetabookApp {
     focus: gpui::FocusHandle,
     api_base: SharedString,
-    category: Option<&'static str>,
-    scan_options: bool,
     full_json: bool,
-    query: Entity<InputState>,
+    query: Entity<TextInput>,
+    upload_progress: Option<Arc<api::UploadProgress>>,
     tokenizer: Entity<SelectState<Vec<&'static str>>>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     epub_path: Option<PathBuf>,
@@ -146,8 +154,9 @@ impl MetabookApp {
 
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        let query =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Title, ISBN, or Gutenberg ID"));
+        let query = cx.new(|cx| {
+            TextInput::new(window, cx).placeholder("Search by title, author, ISBN, or Gutenberg ID")
+        });
         // Optional token counting: a known Hugging Face tokenizer, defaulting
         // to bert-base-uncased. "No tokens" omits the parameter entirely.
         let tokenizer = cx.new(|cx| {
@@ -174,10 +183,9 @@ impl MetabookApp {
         let mut app = Self {
             focus,
             api_base: api_base.into(),
-            category: None,
-            scan_options: false,
             full_json: false,
             query,
+            upload_progress: None,
             tokenizer,
             detail,
             epub_path: None,
@@ -200,7 +208,7 @@ impl MetabookApp {
         if self.is_processing() {
             return;
         }
-        let query = self.query.read(cx).value().trim().to_string();
+        let query = self.query.read(cx).text().trim().to_string();
         if query.is_empty() {
             self.phase = Phase::Failed {
                 message: "Enter a title, an ISBN, or a Gutenberg ID to search.".into(),
@@ -225,6 +233,8 @@ impl MetabookApp {
         let base = self.api_base.to_string();
         self.begin_request(
             "Searching Gutendex…",
+            false,
+            true,
             move || api::search(&base, &query, page),
             window,
             cx,
@@ -240,6 +250,8 @@ impl MetabookApp {
         let tokenizer = self.tokenizer_value(cx);
         self.begin_request(
             "Fetching and scanning the book text…",
+            true,
+            false,
             move || {
                 api::fetch_by_id(&base, gutenberg_id, &detail, &tokenizer)
                     .map(SearchOutcome::Analysis)
@@ -256,6 +268,8 @@ impl MetabookApp {
         let base = self.api_base.to_string();
         self.begin_request(
             "Opening the saved book structure…",
+            true,
+            false,
             move || api::fetch_upload(&base, &id).map(SearchOutcome::Analysis),
             window,
             cx,
@@ -273,9 +287,16 @@ impl MetabookApp {
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
         let tokenizer = self.tokenizer_value(cx);
+        let progress = Arc::new(api::UploadProgress::default());
+        self.upload_progress = Some(progress.clone());
         self.begin_request(
             "Uploading and scanning the EPUB…",
-            move || api::upload(&base, &path, &detail, &tokenizer).map(SearchOutcome::Analysis),
+            false,
+            true,
+            move || {
+                api::upload(&base, &path, &detail, &tokenizer, progress)
+                    .map(SearchOutcome::Analysis)
+            },
             window,
             cx,
         );
@@ -284,6 +305,8 @@ impl MetabookApp {
     fn begin_request(
         &mut self,
         message: &'static str,
+        detail_loading: bool,
+        home_view: bool,
         work: impl FnOnce() -> Result<SearchOutcome, String> + Send + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -292,7 +315,31 @@ impl MetabookApp {
         let ix = self.request_ix;
         self.phase = Phase::Processing {
             message: message.into(),
+            detail_loading,
+            home_view,
         };
+        self.query
+            .update(cx, |query, cx| query.set_disabled(true, cx));
+        if self.upload_progress.is_some() && home_view {
+            cx.spawn_in(window, async move |this, cx| loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let running = this
+                    .update_in(cx, |this, _, cx| {
+                        let running = this.request_ix == ix && this.is_processing();
+                        if running {
+                            cx.notify();
+                        }
+                        running
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+            })
+            .detach();
+        }
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -315,6 +362,9 @@ impl MetabookApp {
         if ix != self.request_ix {
             return; // A newer request superseded this one.
         }
+        self.upload_progress = None;
+        self.query
+            .update(cx, |query, cx| query.set_disabled(false, cx));
         self.phase = match result {
             Ok(SearchOutcome::Analysis(analysis)) => {
                 let tree = Rc::new(analysis.tree);
@@ -357,6 +407,8 @@ impl MetabookApp {
                     schema_json,
                     ranges: analysis.ranges,
                     selected_node: None,
+                    graph_focus: graph_data::Focus::Book,
+                    graph_page: 0,
                     tree,
                     expanded,
                     tree_state,
@@ -377,18 +429,23 @@ impl MetabookApp {
         cx.notify();
     }
 
-    fn choose_epub(&mut self, cx: &mut Context<Self>) {
+    fn choose_epub(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
             prompt: None,
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 if let Some(path) = paths.into_iter().next() {
-                    this.update(cx, |this, cx| this.set_epub_path(path, cx))
-                        .ok();
+                    this.update_in(cx, |this, window, cx| {
+                        this.set_epub_path(path, cx);
+                        if !matches!(this.phase, Phase::Failed { .. }) {
+                            this.start_upload(window, cx);
+                        }
+                    })
+                    .ok();
                 }
             }
         })
@@ -512,10 +569,21 @@ impl MetabookApp {
             .read(cx)
             .selected_entry()
             .map(|entry| entry.item().id.to_string());
+        self.select_structure_node(selected_id, window, cx);
+    }
+
+    fn select_structure_node(
+        &mut self,
+        selected_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let highlight_bg = cx.theme().colors.selection;
         let Phase::Done {
             ranges,
             selected_node,
+            graph_focus,
+            graph_page,
             editor_state,
             decorations,
             ..
@@ -523,14 +591,17 @@ impl MetabookApp {
         else {
             return;
         };
-        let (Some(editor_state), Some(decorations)) = (editor_state.clone(), decorations.clone())
-        else {
-            return;
-        };
         if *selected_node == selected_id {
             return;
         }
         *selected_node = selected_id.clone();
+        *graph_focus = graph_data::Focus::Structure(selected_id.clone());
+        *graph_page = 0;
+        cx.notify();
+        let (Some(editor_state), Some(decorations)) = (editor_state.clone(), decorations.clone())
+        else {
+            return;
+        };
         let span = selected_id.and_then(|id| ranges.get(&id).cloned());
         if let Some(span) = span {
             editor_state.update(cx, |state, cx| {
@@ -663,31 +734,6 @@ impl MetabookApp {
         cx.notify();
     }
 
-    /// Files dragged from the operating system onto the library drop zone.
-    /// The first `.epub` wins; anything else reports what the zone accepts.
-    fn on_epub_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        if self.is_processing() {
-            return;
-        }
-        let epub = paths
-            .0
-            .iter()
-            .find(|path| {
-                path.extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("epub"))
-            })
-            .cloned();
-        match epub {
-            Some(path) => self.set_epub_path(path, cx),
-            None => {
-                self.phase = Phase::Failed {
-                    message: "Drop an .epub file — other formats can't be scanned.".into(),
-                };
-                cx.notify();
-            }
-        }
-    }
-
     fn toggle_theme(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let mode = if cx.theme().is_dark() {
             Mode::Light
@@ -708,8 +754,16 @@ impl MetabookApp {
     /// the shared content inset.
     fn render_content(&self, cx: &Context<Self>) -> AnyElement {
         match &self.phase {
-            Phase::Idle => self.render_dashboard(cx),
-            Phase::Processing { message } => {
+            Phase::Idle => self.render_home(cx),
+            Phase::Processing {
+                home_view: true, ..
+            } => self.render_home(cx),
+            Phase::Processing {
+                message,
+                detail_loading: true,
+                ..
+            } => self.render_detail_loading(message.clone(), cx),
+            Phase::Processing { message, .. } => {
                 Self::render_page(self.render_processing(message.clone(), cx))
             }
             Phase::Matches { page } => Self::render_page(self.render_matches(page.clone(), cx)),
@@ -852,28 +906,18 @@ impl MetabookApp {
     }
 
     fn render_failed(&self, message: SharedString, cx: &Context<Self>) -> impl IntoElement {
+        use ely_gpui_component::buttons::{Button as ElyButton, ButtonVariant};
         v_flex().size_full().items_center().justify_center().child(
-            v_flex()
-                .gap_2()
-                .max_w_96()
-                .p_4()
-                .border_1()
-                .bg(cx.theme().colors.danger_subtle)
-                .border_color(cx.theme().colors.danger)
-                .rounded(cx.theme().radius(Radius::Lg))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .text_color(cx.theme().colors.danger)
-                        .child(gpui_component::Icon::new(IconName::CircleX).small())
-                        .child(div().font_semibold().child("Request failed")),
-                )
-                .child(
-                    div()
-                        .text_size(cx.theme().text_size(TextSize::Sm))
-                        .child(message),
-                ),
+            ely_gpui_component::feedback::ResultView::failure(
+                ("request-failed", self.request_ix),
+                "Unable to complete the book request",
+            )
+            .body(message)
+            .action(
+                ElyButton::new("failure-library", "Return to library")
+                    .variant(ButtonVariant::Outline)
+                    .on_click(cx.listener(|this, _, _, cx| this.show_dashboard(cx))),
+            ),
         )
     }
 
@@ -997,9 +1041,19 @@ impl Render for MetabookApp {
                     .title_bar(
                         v_flex()
                             .child(self.render_title_bar(cx))
-                            .child(self.render_toolbar(cx)),
+                            .when(!self.is_home(), |bar| bar.child(self.render_toolbar(cx))),
                     )
-                    .sidebar(self.render_sidebar(cx))
+                    .when(
+                        matches!(
+                            self.phase,
+                            Phase::Done { .. }
+                                | Phase::Processing {
+                                    detail_loading: true,
+                                    ..
+                                }
+                        ),
+                        |shell| shell.sidebar(self.render_sidebar(cx)),
+                    )
                     .child(
                         v_flex()
                             .flex_1()

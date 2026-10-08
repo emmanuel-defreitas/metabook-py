@@ -4170,6 +4170,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui-motion",
  "gpui_platform",
+ "jiff",
  "serde_json",
  "ureq",
 ]

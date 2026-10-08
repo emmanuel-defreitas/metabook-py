@@ -2,6 +2,8 @@
 use super::{Library, MetabookApp, Phase};
 use crate::api::LibraryBook;
 use ely_gpui_component::buttons::{Button, ButtonVariant};
+use ely_gpui_component::feedback::ResultView;
+use ely_gpui_component::motion::SkeletonText;
 use ely_gpui_component::theme::{ActiveTheme as _, ControlSize, TextSize};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -50,21 +52,6 @@ pub(super) fn language(book: &Value) -> String {
         Some("es") => "Spanish (es)".into(),
         Some(code) => code.into(),
         None => "Language not provided".into(),
-    }
-}
-pub(super) fn matches_category(record: &Value, category: Option<&str>) -> bool {
-    let Some(category) = category else {
-        return true;
-    };
-    let subjects = field(&record["book"], "subjects").to_lowercase();
-    match category {
-        "theology" => ["theolog", "religion", "bible", "scripture"]
-            .iter()
-            .any(|term| subjects.contains(term)),
-        "ai" => {
-            subjects.contains("artificial intelligence") || subjects.contains("machine learning")
-        }
-        _ => subjects.contains(category),
     }
 }
 fn timestamp(value: &Value) -> String {
@@ -364,7 +351,7 @@ impl MetabookApp {
                             .h_80()
                             .when(self.full_json, |pane| match editor_state {
                                 Some(state) => pane.child(Editor::new(state).h(relative(1.))),
-                                None => pane.child("Preparing JSON…"),
+                                None => pane.child(SkeletonText::new("loading-json-editor", 12)),
                             })
                             .when(!self.full_json, |pane| {
                                 pane.child(self.render_selected_fields(
@@ -378,10 +365,10 @@ impl MetabookApp {
             );
         div().id("book-detail-page").flex_1().min_h_0().min_w_0().overflow_y_scroll()
             .child(v_flex().pl_12().pr_8().py_8().gap_8()
-                .child(h_flex().justify_between().items_start().gap_4()
-                    .child(v_flex().gap_3().child(div().text_size(cx.theme().text_size(TextSize::Xl)).font_semibold().child("Book metadata & structure"))
-                        .child(div().text_color(cx.theme().colors.fg_muted).text_size(cx.theme().text_size(TextSize::Sm)).child("Structure and counts, never book text")))
-                    .child(copy))
+                .child(ResultView::success(("schema-success",self.request_ix), "Book schema ready")
+                    .body(format!("{} · {} · metadata and structural counts, without book text",field(book,"title"),field(structure,"schema")))
+                    .action(copy))
+                .child(self.render_book_graph(cx))
                 .child(self.detail_pair("Bibliographic metadata",bibliographic,"Scan & source file",scan,cx))
                 .child(v_flex().gap_5().child(self.detail_pair("Schema classification",classification,"Automatic detection",automatic,cx))
                     .child(self.detail_note("Rule support, not a probability. Confidence describes automatic detection even when overridden.",cx)))
@@ -526,12 +513,5 @@ mod tests {
         assert!(fields.contains(&("word_count".into(), "4".into())));
         assert!(!fields.iter().any(|(key, _)| key == "sentences"));
         assert!(selected_fields(&value, "n0.8").is_none());
-    }
-    #[test]
-    fn categories_use_subjects_without_matching_fragments_in_titles() {
-        let record = serde_json::json!({"book":{"title":"Daily thoughts","subjects":["Artificial intelligence"]}});
-        assert!(matches_category(&record, Some("ai")));
-        assert!(!matches_category(&record, Some("theology")));
-        assert!(matches_category(&record, None));
     }
 }
