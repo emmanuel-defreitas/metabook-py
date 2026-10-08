@@ -27,7 +27,7 @@ class UploadedBookInfo(BaseModel):
     publisher: str | None = None
     license: str | None = None
     date: str | None = None
-    number_of_pages: int | None = Field(None, ge=0)
+    number_of_pages: int | None = Field(default=None, ge=0)
 
 
 class BlobInfo(BaseModel):
