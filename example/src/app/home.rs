@@ -335,7 +335,7 @@ impl MetabookApp {
                 .rounded(cx.theme().radius(Radius::Md))
                 .child(
                     Icon::new(IconName::BookOpen)
-                        .size(IconSize::Lg)
+                        .size(IconSize::Xl)
                         .color(cx.theme().colors.fg_muted),
                 )
                 .into_any_element(),
@@ -343,7 +343,7 @@ impl MetabookApp {
         let preview = h_flex()
             .gap_3()
             .items_start()
-            .child(div().w(rems(3.)).h(rems(4.5)).flex_none().child(cover))
+            .child(div().w(rems(3.6)).h(rems(5.4)).flex_none().child(cover))
             .child(
                 v_flex()
                     .flex_1()

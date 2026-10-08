@@ -8,7 +8,7 @@ The development bundle runs against its local API and the configured Aiven Postg
 - Home has no toolbar, sidebar or master/detail panels. It presents the logo/name, large Ely Input with a right-side search icon, EPUB DropZone, and a responsive grid of compact horizontal cover cards from the past seven days.
 - The pinned library exports the documented drag/drop behavior as `forms::DropZone`; it has no `DragDropFiles` type. Its native picker and external-file target share the same upload callback.
 - Uploads show a Banner and FileOperationProgress. Byte counts measure the multipart request consumed by the HTTP client. After transfer, the banner reports parsing while waiting for the API result; the API provides no parser percentage.
-- Recents filter recorded created/updated/scan timestamps, sort newest first, and exclude missing, malformed and future timestamps. Their 48×72-pixel thumbnails show real cached covers or themed book icons. Saved JSON titles, authors, actual file sizes and changed times sit to the right, without book prose.
+- Recents filter recorded created/updated/scan timestamps, sort newest first, and exclude missing, malformed and future timestamps. Their 3.6×5.4-rem thumbnails show real cached covers or themed book icons. Saved JSON titles, authors, actual file sizes and changed times sit to the right, without book prose.
 - Book detail uses NetworkGraph with metadata and structural relationships. Named controls navigate because the pinned graph supports hover/drag, but has no node-click callback. Twelve-child pages cover the complete structure; structural navigation synchronizes the lazy tree and JSON selection.
 - Ely skeletons appear while saved or selected Gutenberg books open. ResultView displays success after structural response validation, or failure with a Return to library action.
 
@@ -35,6 +35,10 @@ The development bundle runs against its local API and the configured Aiven Postg
 - Moved the Ely theme IconButton into a borderless top window-control row, with Ely drag-region behavior and native traffic-light clearance. The logo header no longer holds that control.
 - Replaced tall FilePreview cards with Ely Image/Icon and ellipsis typography because FilePreview only supports text below its image. Fixed 48×72-pixel thumbnails sit beside the saved JSON title, authors, actual byte size and changed time. Existing filtering, cover cache and mouse/keyboard open handlers are retained.
 - Native checks at 1505 and 960 pixels verified compact rows, placeholder text and right-side search icons. The top theme button switched the app to light mode. Activating Pride and Prejudice reopened its saved structure with HTTP 200; returning home restored the cards. Both focused home tests passed, alongside final all-targets check, formatting and bundle build. The earlier full-suite JSON-theme failure remains documented above.
+
+## Thumbnail scale follow-up — 2026-10-08
+
+- Increased the cover well from 3×4.5 rem to 3.6×5.4 rem (1.2×). Missing-cover icons use Ely IconSize::Xl, the next size up. Text remains alongside the image. Background overrides await the requested dark/light hex values.
 
 ## Automated checks
 
