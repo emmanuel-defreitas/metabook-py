@@ -499,7 +499,7 @@ impl MetabookApp {
     /// The work area. Idle shows the library (its own scroll owner, so the
     /// scrollbar sits at the panel edge); every other phase is a page inside
     /// the shared content inset.
-    fn render_content(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         match &self.phase {
             Phase::Idle => self.render_home(window, cx),
             Phase::Processing {
@@ -682,11 +682,13 @@ impl Render for MetabookApp {
             .text_color(cx.theme().colors.fg)
             .child(
                 AppShell::new()
-                    .title_bar(
-                        v_flex()
-                            .child(self.render_title_bar(cx))
-                            .when(!self.is_home(), |bar| bar.child(self.render_toolbar(cx))),
-                    )
+                    .when(!self.is_home(), |shell| {
+                        shell.title_bar(
+                            v_flex()
+                                .child(self.render_title_bar(cx))
+                                .child(self.render_toolbar(cx)),
+                        )
+                    })
                     .when(
                         matches!(
                             self.phase,

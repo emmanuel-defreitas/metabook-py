@@ -2,14 +2,15 @@
 use super::{Cover, Library, MetabookApp, Phase};
 use crate::api::LibraryBook;
 use ely_gpui_component::{
-    buttons::{Button, ButtonVariant},
+    buttons::{Button, ButtonVariant, IconButton},
     feedback::Banner,
     files::{FileOperation, FileOperationProgress, FilePreview, TransferState},
     forms::{DropZone, SearchInput},
     layout::SimpleGrid,
     lists::DirEntry,
     motion::SkeletonCard,
-    primitives::{FocusRing as _, Severity},
+    primitives::{FocusRing as _, IconName, Severity},
+    shell::drag_region,
     theme::{ActiveTheme as _, ControlSize, Radius, TextSize},
 };
 use gpui::prelude::FluentBuilder as _;
@@ -61,7 +62,11 @@ fn recent_at(record: &Value, now: Timestamp) -> Option<Timestamp> {
 }
 
 impl MetabookApp {
-    pub(super) fn render_home(&self, window: &gpui::Window, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn render_home(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let this = cx.entity();
         let drop = DropZone::new("home-epub-drop")
             .kinds(&["epub"])
@@ -86,16 +91,15 @@ impl MetabookApp {
             .child(
                 v_flex()
                     .w_full()
-                    .items_center()
                     .when(self.is_processing(), |home| {
                         home.child(self.render_home_operation(cx))
                     })
                     .child(
                         v_flex()
                             .w_full()
-                            .max_w(rems(58.))
                             .px_8()
-                            .py_16()
+                            .pt_12()
+                            .pb_8()
                             .gap_6()
                             .child(
                                 h_flex()
@@ -112,11 +116,35 @@ impl MetabookApp {
                                             .text_size(cx.theme().text_size(TextSize::Xxl))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child("metaBook"),
+                                    )
+                                    .child(
+                                        drag_region("home-window-drag", window, cx)
+                                            .flex_1()
+                                            .h(rems(2.5)),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            "home-theme-toggle",
+                                            if cx.theme().is_dark() {
+                                                IconName::Sun
+                                            } else {
+                                                IconName::Moon
+                                            },
+                                        )
+                                        .variant(ButtonVariant::Outline)
+                                        .size(ControlSize::Md)
+                                        .tooltip("Switch between light and dark mode")
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.toggle_theme(window, cx);
+                                            }),
+                                        ),
                                     ),
                             )
                             .child(
                                 v_flex()
-                                    .gap_0()
+                                    .gap_2()
                                     .child(
                                         h_flex()
                                             .gap_3()
@@ -266,8 +294,8 @@ impl MetabookApp {
                 }
                 SimpleGrid::new(
                     "recent-books-grid",
-                    window.rem_size() * 15.,
-                    window.rem_size() * 1.5,
+                    window.rem_size() * 12.,
+                    window.rem_size(),
                 )
                 .children(
                     books

@@ -2,7 +2,7 @@
 
 An [Ely](https://elygpui.com) native client for the Book Structure API, with the library and book-detail layout from the metaBook Sketch document. The retained JSON editor and lazy structure tree use gpui-component through an Ely theme bridge.
 
-Home is a single canvas with the metaBook mark, a large Ely `SearchInput`, an EPUB `DropZone`, and recent saved-book cover previews. Search accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Browse or drop one EPUB to start analysis immediately.
+Home is a full-width canvas with padded edges, no separate title bar, a top-right Ely light/dark toggle, the metaBook mark, a large Ely `SearchInput`, an EPUB `DropZone`, and compact recent saved-book cover previews. Search and drop are separated by an eight-pixel gap. Search accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Browse or drop one EPUB to start analysis immediately.
 
 Search browses [Gutendex](https://gutendex.com) metadata through `/api/books/search`,
 including all languages by default. The result count and Previous/Next controls

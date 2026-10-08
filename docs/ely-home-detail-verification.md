@@ -20,6 +20,14 @@ The development bundle runs against its local API and the configured Aiven Postg
 - Cards retain the seven-day filter and saved-result opening, with Tab, Enter/Space, a visible focus ring, and button accessibility labels.
 - Native checks at 1505 px and the app's 960 px minimum width showed three correctly sized portrait columns, a loaded Pride and Prejudice cover, and missing-cover icons. Light/dark checks confirmed themed placeholders. Tab from Search through Browse to the first preview, then Enter, reopened its saved structure with HTTP 200.
 
+## Full-width home revision — 2026-10-08
+
+- Removed the separate Ely title bar on home. Detail views retain their controls; a borderless Ely drag region in the home header handles window dragging and double-click zoom.
+- Removed the centered 58-rem width cap. Home and recents fill the window with 32-pixel side padding; search and DropZone have an eight-pixel gap.
+- Reduced the grid minimum to 12 rem with a one-rem gutter: six cover slots at 1505 pixels, four at the 960-pixel minimum. Existing cover data, portrait placeholders and saved-result activation remain in use.
+- Added a top-right Ely IconButton that switches the existing animated Ely theme. Native activation changed the whole home and its placeholders between dark and light.
+- All-targets check, formatting, diff check and bundle build passed. The current native suite passed 36 tests and failed the unchanged JSON syntax theme test; a focused rerun reproduced its background-color assertion failure. This layout change does not modify theme or explorer code.
+
 ## Automated checks
 
 ```sh
