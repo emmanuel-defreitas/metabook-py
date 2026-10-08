@@ -38,7 +38,8 @@ The development bundle runs against its local API and the configured Aiven Postg
 
 ## Thumbnail scale follow-up — 2026-10-08
 
-- Increased the cover well from 3×4.5 rem to 3.6×5.4 rem (1.2×). Missing-cover icons use Ely IconSize::Xl, the next size up. Text remains alongside the image. Background overrides await the requested dark/light hex values.
+- Increased the cover well from 3×4.5 rem to 3.6×5.4 rem (1.2×). Missing-cover icons use Ely IconSize::Xl, the next size up. Text remains alongside the image. The requested backgrounds are installed through Ely custom palettes: light #E2E4FF and dark #18181E. Only the page background is overridden.
+- Rebuilt and reopened the bundle; native switching showed both custom backgrounds. Screenshot sampling uses the Studio Display color profile and is not a device-independent RGB assertion. Final all-targets check, formatting and four focused theme tests passed; the previously failing JSON-theme test was explicitly excluded from this focused run.
 
 ## Automated checks
 

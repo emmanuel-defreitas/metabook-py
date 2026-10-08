@@ -4,6 +4,8 @@ An [Ely](https://elygpui.com) native client for the Book Structure API, with the
 
 Home is a full-width canvas with padded edges, a borderless window-control row with a top-right Ely light/dark toggle, the metaBook mark, a large Ely `Input` with a right-side search icon, an EPUB `DropZone`, and compact recent saved-book cover previews. Both the search/button gap and the search/drop gap are eight pixels. Search accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Browse or drop one EPUB to start analysis immediately.
 
+The Ely theme uses `#E2E4FF` for the light page background and `#18181E` for the dark page background. Other semantic colors and animated theme switching stay managed by Ely.
+
 Search browses [Gutendex](https://gutendex.com) metadata through `/api/books/search`,
 including all languages by default. The result count and Previous/Next controls
 cover every page (up to 32 books per page). Select a row or **Schema** to analyse
