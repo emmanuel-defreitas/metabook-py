@@ -18,9 +18,6 @@ serde_json = "1"
 jiff = "0.2"
 ureq = "2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26"
-
 [dev-dependencies]
 # test-support enables gpui's TestAppContext / simulated input, used by the
 # interaction tests in tests/.

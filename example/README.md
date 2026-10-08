@@ -6,7 +6,7 @@ Home is a full-width canvas with padded edges, a borderless window-control row w
 
 The Ely theme uses `#F6F6FF` for the light page background and `#18181E` for the dark page background. Other semantic colors and animated theme switching stay managed by Ely.
 
-The supplied green mark is rendered as an Ely image. Light and dark app-icon artwork lives in `assets/branding`; `build-app.sh` packages standard ICNS sizes using AppKit and iconutil. The running macOS Dock icon follows the Ely theme, while Finder uses the light bundle fallback. The original SVG is retained as `logo-source.svg`. Supplied icon images are 258×239 pixels, so larger ICNS sizes are resampled from that artwork.
+The supplied green mark is rendered as an Ely image. The macOS icon source is `assets/branding/metabook.icon`, preserved from Icon Composer. `build-app.sh` uses Xcode’s `actool` to compile its layered artwork and appearance variants into `Assets.car`, plus an ICNS fallback for older macOS versions. macOS controls the icon appearance; the app’s Ely theme toggle controls the app content. The original logo SVG is retained as `logo-source.svg`.
 
 Search browses [Gutendex](https://gutendex.com) metadata through `/api/books/search`,
 including all languages by default. The result count and Previous/Next controls

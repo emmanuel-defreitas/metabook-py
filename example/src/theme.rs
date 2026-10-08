@@ -1,8 +1,5 @@
 //! Project Ely's live theme onto retained gpui-component widgets.
 
-#[cfg(target_os = "macos")]
-mod app_icon;
-
 use std::sync::Arc;
 
 use ely_gpui_component::theme::{Mix, Mode, Palette, Radius, TextSize, Theme as ElyTheme};
@@ -62,11 +59,6 @@ pub fn synchronize(cx: &mut App) {
     };
     if cx.has_global::<Snapshot>() && cx.global::<Snapshot>() == &snapshot {
         return;
-    }
-
-    #[cfg(target_os = "macos")]
-    if !cx.has_global::<Snapshot>() || cx.global::<Snapshot>().mode != snapshot.mode {
-        app_icon::set(snapshot.mode);
     }
 
     let theme = Theme::global_mut(cx);

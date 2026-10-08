@@ -4164,7 +4164,6 @@ dependencies = [
 name = "metabook-example"
 version = "0.1.0"
 dependencies = [
- "cocoa 0.26.0",
  "ely-gpui-component",
  "gpui",
  "gpui-component",
