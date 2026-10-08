@@ -4,7 +4,7 @@ An [Ely](https://elygpui.com) native client for the Book Structure API, with the
 
 Home is a full-width canvas with padded edges, a borderless window-control row with a top-right Ely light/dark toggle, the metaBook mark, a large Ely `Input` with a right-side search icon, an EPUB `DropZone`, and compact recent saved-book cover previews. Both the search/button gap and the search/drop gap are eight pixels. Search accepts a title or author, an ISBN (including hyphens), or a Gutenberg ID. Browse or drop one EPUB to start analysis immediately.
 
-The Ely theme uses `#F6F6FF` for the light page background and `#18181E` for the dark page background. Other semantic colors and animated theme switching stay managed by Ely.
+The Ely theme uses the supplied DesignSystems.one semantic palette: `#F9FAFD` for the light page background and `#0F1217` for the dark page background. Animated theme switching stays managed by Ely.
 
 The supplied green mark is rendered as an Ely image. The macOS icon source is `assets/branding/metabook.icon`, preserved from Icon Composer. `build-app.sh` uses Xcode’s `actool` to compile its layered artwork and appearance variants into `Assets.car`, plus an ICNS fallback for older macOS versions. macOS controls the icon appearance; the app’s Ely theme toggle controls the app content. The original logo SVG is retained as `logo-source.svg`.
 
@@ -88,3 +88,5 @@ This is a development bundle tied to this checkout and its `.venv`; moving it to
 another machine requires that checkout and Python dependencies. Credentials are
 not copied into the bundle. The API stores related metadata and structural results
 in PostgreSQL, and confirms success only after the transaction commits.
+
+Color tokens are checked in at `assets/design-tokens.json`, from the supplied DesignSystems.one export. `src/theme/tokens.rs` maps its light/dark semantic colors to Ely, including primary actions, neutral surfaces, feedback, focus, charts and code syntax. Typography, spacing, radius and motion remain governed by Ely’s existing settings.

@@ -1,9 +1,11 @@
 //! Project Ely's live theme onto retained gpui-component widgets.
 
+mod tokens;
+
 use std::sync::Arc;
 
 use ely_gpui_component::theme::{Mix, Mode, Palette, Radius, TextSize, Theme as ElyTheme};
-use gpui::{rgb, App, Global, Pixels, SharedString};
+use gpui::{App, Global, Pixels, SharedString};
 use gpui_component::{
     highlighter::{HighlightTheme, SyntaxColors},
     Theme, ThemeColor, ThemeMode, ThemeTokens,
@@ -26,13 +28,8 @@ impl Global for Snapshot {}
 /// Call after both libraries initialize, before opening a window.
 pub fn init(cx: &mut App) {
     let mode = Mode::from(cx.window_appearance());
-    // Keep Ely's semantic colors and animation, overriding only the page background.
-    for (palette_mode, mut palette, background) in [
-        (Mode::Light, Palette::light(false), 0xf6f6ff),
-        (Mode::Dark, Palette::dark(false), 0x18181e),
-    ] {
-        palette.bg = rgb(background).into();
-        ElyTheme::set_palette(palette_mode, Some(palette), cx);
+    for mode in [Mode::Light, Mode::Dark] {
+        ElyTheme::set_palette(mode, Some(tokens::palette(mode)), cx);
     }
     // Ely initializes Platform::current(); leave that platform policy intact.
     ElyTheme::set_mode_now(mode, cx);
