@@ -38,8 +38,14 @@ The development bundle runs against its local API and the configured Aiven Postg
 
 ## Thumbnail scale follow-up — 2026-10-08
 
-- Increased the cover well from 3×4.5 rem to 3.6×5.4 rem (1.2×). Missing-cover icons use Ely IconSize::Xl, the next size up. Text remains alongside the image. The requested backgrounds are installed through Ely custom palettes: light #E2E4FF and dark #18181E. Only the page background is overridden.
+- Increased the cover well from 3×4.5 rem to 3.6×5.4 rem (1.2×). Missing-cover icons use Ely IconSize::Xl, the next size up. Text remains alongside the image. The requested backgrounds are installed through Ely custom palettes: light #F6F6FF and dark #18181E. Only the page background is overridden.
 - Rebuilt and reopened the bundle; native switching showed both custom backgrounds. Screenshot sampling uses the Studio Display color profile and is not a device-independent RGB assertion. Final all-targets check, formatting and four focused theme tests passed; the previously failing JSON-theme test was explicitly excluded from this focused run.
+
+## Branding follow-up — 2026-10-08
+
+- Light background is #F6F6FF; dark stays #18181E. The supplied transparent green mark is drawn with Ely Image to preserve color. Original PNGs and pasted SVG remain under assets/branding.
+- AppKit/iconutil packages light and dark ICNS families at standard sizes through 1024 pixels, preserving source aspect ratio. Native Dock selection follows Ely mode changes; Finder uses the light bundle fallback. Source artwork is 258×239 pixels, with larger slots resampled.
+- Native home and Dock screenshots verified the green mark, light background and both supplied icon variants after theme switching. Final all-targets check, locked bundle build, formatting and both focused home tests passed. The earlier full-suite JSON-theme failure remains recorded above.
 
 ## Automated checks
 

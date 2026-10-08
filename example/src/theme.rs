@@ -1,5 +1,8 @@
 //! Project Ely's live theme onto retained gpui-component widgets.
 
+#[cfg(target_os = "macos")]
+mod app_icon;
+
 use std::sync::Arc;
 
 use ely_gpui_component::theme::{Mix, Mode, Palette, Radius, TextSize, Theme as ElyTheme};
@@ -28,7 +31,7 @@ pub fn init(cx: &mut App) {
     let mode = Mode::from(cx.window_appearance());
     // Keep Ely's semantic colors and animation, overriding only the page background.
     for (palette_mode, mut palette, background) in [
-        (Mode::Light, Palette::light(false), 0xe2e4ff),
+        (Mode::Light, Palette::light(false), 0xf6f6ff),
         (Mode::Dark, Palette::dark(false), 0x18181e),
     ] {
         palette.bg = rgb(background).into();
@@ -59,6 +62,11 @@ pub fn synchronize(cx: &mut App) {
     };
     if cx.has_global::<Snapshot>() && cx.global::<Snapshot>() == &snapshot {
         return;
+    }
+
+    #[cfg(target_os = "macos")]
+    if !cx.has_global::<Snapshot>() || cx.global::<Snapshot>().mode != snapshot.mode {
+        app_icon::set(snapshot.mode);
     }
 
     let theme = Theme::global_mut(cx);

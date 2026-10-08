@@ -15,15 +15,27 @@ use ely_gpui_component::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, rems, svg, Animation, AnimationExt as _, AnyElement, Context, FontWeight,
+    div, rems, Animation, AnimationExt as _, AnyElement, Context, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement as _, Styled,
 };
 use gpui_component::{h_flex, v_flex};
 use jiff::Timestamp;
 use serde_json::Value;
+use std::sync::{Arc, OnceLock};
 
 const WEEK: i64 = 7 * 24 * 60 * 60;
+
+fn brand_mark() -> Arc<gpui::Image> {
+    static MARK: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+    MARK.get_or_init(|| {
+        Arc::new(gpui::Image::from_bytes(
+            gpui::ImageFormat::Png,
+            include_bytes!("../../assets/branding/logo.png").to_vec(),
+        ))
+    })
+    .clone()
+}
 
 /// Use recorded activity only; missing, malformed and future dates stay out.
 fn recent_at(record: &Value, now: Timestamp) -> Option<Timestamp> {
@@ -121,10 +133,9 @@ impl MetabookApp {
                                     .gap_3()
                                     .items_center()
                                     .child(
-                                        svg()
-                                            .path("icons/metabook-mark.svg")
+                                        Image::new("home-brand-mark", brand_mark())
                                             .size(rems(2.))
-                                            .text_color(cx.theme().colors.accent),
+                                            .fit(gpui::ObjectFit::Contain),
                                     )
                                     .child(
                                         div()
