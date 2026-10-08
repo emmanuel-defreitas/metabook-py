@@ -1,19 +1,15 @@
 //! Structured detail presentation; every value comes from the API or library.
 use super::{Library, MetabookApp, Phase};
 use crate::api::LibraryBook;
-use ely_gpui_component::buttons::{Button, ButtonVariant};
 use ely_gpui_component::feedback::ResultView;
-use ely_gpui_component::motion::SkeletonText;
-use ely_gpui_component::theme::{ActiveTheme as _, ControlSize, TextSize};
-use gpui::prelude::FluentBuilder as _;
+use ely_gpui_component::theme::{ActiveTheme as _, TextSize};
 use gpui::{
-    div, relative, AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement,
+    div, AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement,
     StatefulInteractiveElement as _, Styled,
 };
-use gpui_component::input::Editor;
+
 use gpui_component::{h_flex, v_flex, StyledExt as _};
 use serde_json::Value;
-use std::rc::Rc;
 
 pub(super) fn field(value: &Value, key: &str) -> String {
     display(&value[key])
@@ -79,23 +75,20 @@ impl MetabookApp {
         books.iter().find(|book| book.id == id)
     }
 
-    pub(super) fn render_book_detail(&self, cx: &Context<Self>) -> AnyElement {
-        let Phase::Done {
-            value,
-            tree_state,
-            editor_state,
-            selected_node,
-            ..
-        } = &self.phase
-        else {
-            unreachable!()
+    pub(super) fn render_book_detail(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Phase::Done { explorer, .. } = &self.phase else {
+            return div().into_any_element();
         };
+        let value = explorer.read(cx).value().clone();
+        // These regions share the explorer's callbacks without exposing its
+        // mutable tree, graph navigation, or editor internals to the shell.
+        let presentation = explorer.update(cx, |explorer, cx| explorer.presentation(cx));
         let book = &value["book"];
         let structure = &value["structure"];
         let summary = &structure["summary"];
         let meta = &value["meta"];
         let record = self
-            .result_record(value)
+            .result_record(&value)
             .map(|book| &book.record)
             .unwrap_or(&Value::Null);
         let authors = book["authors"]
@@ -288,94 +281,20 @@ impl MetabookApp {
             )
         })
         .to_vec();
-        let copy = Button::new(
-            "copy-schema",
-            if self.copied { "Copied" } else { "Copy JSON" },
-        )
-        .variant(ButtonVariant::Outline)
-        .size(ControlSize::Sm)
-        .on_click(cx.listener(|this, _, _, cx| this.copy_schema(cx)));
-        let explorer = h_flex()
-            .w_full()
-            .gap(gpui::rems(3.5))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_3()
-                    .child(self.section_heading("Structure explorer", cx))
-                    .child(
-                        div()
-                            .h_80()
-                            .child(self.render_structure_tree(tree_state.clone(), cx)),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .items_center()
-                            .child(self.section_heading(
-                                if self.full_json {
-                                    "Full structural JSON"
-                                } else {
-                                    "Selected node · JSON fields"
-                                },
-                                cx,
-                            ))
-                            .child(
-                                Button::new(
-                                    "view-full-json",
-                                    if self.full_json {
-                                        "Selected node"
-                                    } else {
-                                        "Full JSON"
-                                    },
-                                )
-                                .variant(ButtonVariant::Ghost)
-                                .size(ControlSize::Sm)
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.full_json = !this.full_json;
-                                        cx.notify();
-                                    },
-                                )),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .h_80()
-                            .when(self.full_json, |pane| match editor_state {
-                                Some(state) => pane.child(Editor::new(state).h(relative(1.))),
-                                None => pane.child(SkeletonText::new("loading-json-editor", 12)),
-                            })
-                            .when(!self.full_json, |pane| {
-                                pane.child(self.render_selected_fields(
-                                    value,
-                                    selected_node.as_deref(),
-                                    cx,
-                                ))
-                            }),
-                    )
-                    .child(self.detail_note("Counts and positions only · no source prose", cx)),
-            );
+
         div().id("book-detail-page").flex_1().min_h_0().min_w_0().overflow_y_scroll()
             .child(v_flex().pl_12().pr_8().py_8().gap_8()
                 .child(ResultView::success(("schema-success",self.request_ix), "Book schema ready")
                     .body(format!("{} · {} · metadata and structural counts, without book text",field(book,"title"),field(structure,"schema")))
-                    .action(copy))
-                .child(self.render_book_graph(cx))
+                    .action(presentation.copy))
+                .child(presentation.graph)
                 .child(self.detail_pair("Bibliographic metadata",bibliographic,"Scan & source file",scan,cx))
                 .child(v_flex().gap_5().child(self.detail_pair("Schema classification",classification,"Automatic detection",automatic,cx))
                     .child(self.detail_note("Rule support, not a probability. Confidence describes automatic detection even when overridden.",cx)))
                 .child(self.detail_pair("Cleaned-body totals",totals,"Averages & optional tokens",averages,cx))
                 .child(v_flex().gap_4().child(self.detail_pair("Detection evidence · signal counts",evidence,"Candidate support",candidates,cx))
                     .child(self.detail_note("Independent candidate scores; they do not sum to one.",cx)))
-                .child(explorer)
+                .child(explorer.clone())
                 .child(div().border_t_1().border_color(cx.theme().colors.border).pt_4()
                     .child(self.detail_note("Indices restart at 1 within each cleaned-body parent; original-source offsets are not exposed.",cx))))
             .into_any_element()
@@ -451,67 +370,5 @@ impl MetabookApp {
                     })),
             )
             .into_any_element()
-    }
-    fn render_selected_fields(
-        &self,
-        value: &Rc<Value>,
-        selected: Option<&str>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let fields = selected.and_then(|id| selected_fields(value, id));
-        let Some(fields) = fields else {
-            return self.detail_note(
-                "Select a chapter, paragraph, or sentence to inspect its structural fields.",
-                cx,
-            );
-        };
-        let last = fields.len().saturating_sub(1);
-        v_flex()
-            .gap_1()
-            .font_family(cx.theme().mono_family.clone())
-            .text_size(cx.theme().text_size(TextSize::Xs))
-            .child("{")
-            .children(fields.into_iter().enumerate().map(|(ix, (key, value))| {
-                div()
-                    .pl_4()
-                    .text_color(cx.theme().colors.link)
-                    .child(format!(
-                        "\"{key}\": {value}{}",
-                        if ix < last { "," } else { "" }
-                    ))
-            }))
-            .child("}")
-            .into_any_element()
-    }
-}
-
-fn selected_fields(value: &Value, id: &str) -> Option<Vec<(String, String)>> {
-    let mut indices = id.strip_prefix('n')?.split('.').map(str::parse::<usize>);
-    let mut node = value["structure"]["nodes"].get(indices.next()?.ok()?)?;
-    for index in indices {
-        let children = ["children", "paragraphs", "sentences", "clauses", "words"]
-            .into_iter()
-            .find_map(|key| node[key].as_array())?;
-        node = children.get(index.ok()?)?;
-    }
-    Some(
-        node.as_object()?
-            .iter()
-            .filter(|(_, v)| !v.is_array() && !v.is_object())
-            .map(|(k, v)| (k.clone(), v.to_string()))
-            .collect(),
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn selected_fields_follow_nested_nodes_without_including_children() {
-        let value = serde_json::json!({"structure":{"nodes":[{"index":1,"paragraphs":[{"index":2,"word_count":4,"sentences":[{"index":1}]}]}]}});
-        let fields = selected_fields(&value, "n0.0").unwrap();
-        assert!(fields.contains(&("word_count".into(), "4".into())));
-        assert!(!fields.iter().any(|(key, _)| key == "sentences"));
-        assert!(selected_fields(&value, "n0.8").is_none());
     }
 }

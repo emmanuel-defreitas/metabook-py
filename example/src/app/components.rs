@@ -119,7 +119,10 @@ impl MetabookApp {
                 )
                 .into_any_element();
         }
-        if let Phase::Done { title, value, .. } = &self.phase {
+        if let Phase::Done { explorer, .. } = &self.phase {
+            let result = explorer.read(cx);
+            let title = result.title();
+            let value = result.value();
             let record = self.result_record(value);
             let cover = record.and_then(|record| record.cover_url.as_deref());
             let book = &value["book"];
