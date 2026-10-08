@@ -5,10 +5,10 @@ The development bundle runs against its local API and the configured Aiven Postg
 
 ## Behavior
 
-- Home has no toolbar, sidebar or master/detail panels. It presents the logo/name, large Ely SearchInput, EPUB DropZone, and a responsive grid of FilePreview cover cards from the past seven days.
+- Home has no toolbar, sidebar or master/detail panels. It presents the logo/name, large Ely Input with a right-side search icon, EPUB DropZone, and a responsive grid of compact horizontal cover cards from the past seven days.
 - The pinned library exports the documented drag/drop behavior as `forms::DropZone`; it has no `DragDropFiles` type. Its native picker and external-file target share the same upload callback.
 - Uploads show a Banner and FileOperationProgress. Byte counts measure the multipart request consumed by the HTTP client. After transfer, the banner reports parsing while waiting for the API result; the API provides no parser percentage.
-- Recents filter recorded created/updated/scan timestamps, sort newest first, and exclude missing, malformed and future timestamps. Their portrait previews show real cached covers or themed book icons. Captions describe the saved metadata JSON and its actual size, without book prose.
+- Recents filter recorded created/updated/scan timestamps, sort newest first, and exclude missing, malformed and future timestamps. Their 48×72-pixel thumbnails show real cached covers or themed book icons. Saved JSON titles, authors, actual file sizes and changed times sit to the right, without book prose.
 - Book detail uses NetworkGraph with metadata and structural relationships. Named controls navigate because the pinned graph supports hover/drag, but has no node-click callback. Twelve-child pages cover the complete structure; structural navigation synchronizes the lazy tree and JSON selection.
 - Ely skeletons appear while saved or selected Gutenberg books open. ResultView displays success after structural response validation, or failure with a Return to library action.
 
@@ -27,6 +27,14 @@ The development bundle runs against its local API and the configured Aiven Postg
 - Reduced the grid minimum to 12 rem with a one-rem gutter: six cover slots at 1505 pixels, four at the 960-pixel minimum. Existing cover data, portrait placeholders and saved-result activation remain in use.
 - Added a top-right Ely IconButton that switches the existing animated Ely theme. Native activation changed the whole home and its placeholders between dark and light.
 - All-targets check, formatting, diff check and bundle build passed. The current native suite passed 36 tests and failed the unchanged JSON syntax theme test; a focused rerun reproduced its background-color assertion failure. This layout change does not modify theme or explorer code.
+
+## Compact horizontal recents revision — 2026-10-08
+
+- Composed the search field from Ely Input with a suffix Search icon: the SearchInput wrapper hardcodes a prefix. The existing TextInput placeholder, clear control and query submission stay in use.
+- Matched the horizontal search/button gap to the vertical search/drop gap at eight pixels.
+- Moved the Ely theme IconButton into a borderless top window-control row, with Ely drag-region behavior and native traffic-light clearance. The logo header no longer holds that control.
+- Replaced tall FilePreview cards with Ely Image/Icon and ellipsis typography because FilePreview only supports text below its image. Fixed 48×72-pixel thumbnails sit beside the saved JSON title, authors, actual byte size and changed time. Existing filtering, cover cache and mouse/keyboard open handlers are retained.
+- Native checks at 1505 and 960 pixels verified compact rows, placeholder text and right-side search icons. The top theme button switched the app to light mode. Activating Pride and Prejudice reopened its saved structure with HTTP 200; returning home restored the cards. Both focused home tests passed, alongside final all-targets check, formatting and bundle build. The earlier full-suite JSON-theme failure remains documented above.
 
 ## Automated checks
 

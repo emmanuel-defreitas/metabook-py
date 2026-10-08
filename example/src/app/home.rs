@@ -4,14 +4,14 @@ use crate::api::LibraryBook;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, IconButton},
     feedback::Banner,
-    files::{FileOperation, FileOperationProgress, FilePreview, TransferState},
-    forms::{DropZone, SearchInput},
+    files::{FileOperation, FileOperationProgress, TransferState},
+    forms::{DropZone, Input},
     layout::SimpleGrid,
-    lists::DirEntry,
     motion::SkeletonCard,
-    primitives::{FocusRing as _, IconName, Severity},
+    primitives::{FocusRing as _, Icon, IconName, Image, Severity},
     shell::drag_region,
-    theme::{ActiveTheme as _, ControlSize, Radius, TextSize},
+    theme::{ActiveTheme as _, ControlSize, IconSize, Radius, TextSize},
+    typography::{format, Ellipsis, MiddleEllipsis},
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -22,31 +22,8 @@ use gpui::{
 use gpui_component::{h_flex, v_flex};
 use jiff::Timestamp;
 use serde_json::Value;
-use std::sync::Arc;
 
 const WEEK: i64 = 7 * 24 * 60 * 60;
-const BOOK_RATIO: f32 = 2.0 / 3.0;
-
-/// FilePreview's default icon well is landscape. A cached SVG keeps both
-/// loaded covers and missing-cover icons in the same portrait book shape.
-pub(super) fn book_placeholder(cx: &gpui::App) -> (gpui::Hsla, Arc<gpui::Image>) {
-    let color = cx.theme().colors.fg_muted;
-    let rgb = color.to_rgb();
-    let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300"><g transform="translate(76 126) scale(2)" fill="none" stroke="rgb({:.0},{:.0},{:.0})" opacity="{}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14m0-14C9 5 5 4 2 5v14c4-1 7 0 10 2m0-14c3-2 7-3 10-2v14c-4-1-7 0-10 2"/></g></svg>"#,
-        rgb.r * 255.,
-        rgb.g * 255.,
-        rgb.b * 255.,
-        color.a,
-    );
-    (
-        color,
-        Arc::new(gpui::Image::from_bytes(
-            gpui::ImageFormat::Svg,
-            svg.into_bytes(),
-        )),
-    )
-}
 
 /// Use recorded activity only; missing, malformed and future dates stay out.
 fn recent_at(record: &Value, now: Timestamp) -> Option<Timestamp> {
@@ -62,6 +39,44 @@ fn recent_at(record: &Value, now: Timestamp) -> Option<Timestamp> {
 }
 
 impl MetabookApp {
+    pub(super) fn render_home_chrome(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        h_flex()
+            .w_full()
+            .h(cx.theme().titlebar_height())
+            .flex_none()
+            .pl(cx.theme().traffic_light_inset())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .child(
+                drag_region("home-window-drag", window, cx)
+                    .flex_1()
+                    .h_full(),
+            )
+            .child(
+                IconButton::new(
+                    "home-theme-toggle",
+                    if cx.theme().is_dark() {
+                        IconName::Sun
+                    } else {
+                        IconName::Moon
+                    },
+                )
+                .variant(ButtonVariant::Ghost)
+                .size(ControlSize::Sm)
+                .tooltip("Switch between light and dark mode")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_theme(window, cx);
+                })),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn render_home(
         &self,
         window: &mut gpui::Window,
@@ -98,7 +113,7 @@ impl MetabookApp {
                         v_flex()
                             .w_full()
                             .px_8()
-                            .pt_12()
+                            .pt_4()
                             .pb_8()
                             .gap_6()
                             .child(
@@ -116,30 +131,6 @@ impl MetabookApp {
                                             .text_size(cx.theme().text_size(TextSize::Xxl))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child("metaBook"),
-                                    )
-                                    .child(
-                                        drag_region("home-window-drag", window, cx)
-                                            .flex_1()
-                                            .h(rems(2.5)),
-                                    )
-                                    .child(
-                                        IconButton::new(
-                                            "home-theme-toggle",
-                                            if cx.theme().is_dark() {
-                                                IconName::Sun
-                                            } else {
-                                                IconName::Moon
-                                            },
-                                        )
-                                        .variant(ButtonVariant::Outline)
-                                        .size(ControlSize::Md)
-                                        .tooltip("Switch between light and dark mode")
-                                        .on_click(
-                                            cx.listener(|this, _, window, cx| {
-                                                cx.stop_propagation();
-                                                this.toggle_theme(window, cx);
-                                            }),
-                                        ),
                                     ),
                             )
                             .child(
@@ -147,12 +138,18 @@ impl MetabookApp {
                                     .gap_2()
                                     .child(
                                         h_flex()
-                                            .gap_3()
+                                            .gap_2()
                                             .items_center()
                                             .child(
                                                 div().flex_1().min_w_0().child(
-                                                    SearchInput::new("home-search", &self.query)
-                                                        .size(ControlSize::Lg),
+                                                    Input::new(&self.query)
+                                                        .size(ControlSize::Lg)
+                                                        .clearable()
+                                                        .suffix(
+                                                            Icon::new(IconName::Search)
+                                                                .size(IconSize::Sm)
+                                                                .color(cx.theme().colors.fg_subtle),
+                                                        ),
                                                 ),
                                             )
                                             .child(
@@ -317,21 +314,59 @@ impl MetabookApp {
         // The preview represents the saved metadata JSON, not the source EPUB.
         let metadata = serde_json::to_vec_pretty(&book.record).unwrap_or_default();
         let name = format!("{}.json", book.title);
-        let preview = FilePreview::new(
-            gpui::ElementId::Name(format!("preview-{id}").into()),
-            DirEntry::file(name, metadata.len() as u64, date),
-        )
-        .picture(
-            match book
-                .cover_url
-                .as_deref()
-                .and_then(|url| self.covers.get(url))
-            {
-                Some(Cover::Ready(image)) => image.clone(),
-                _ => self.preview_placeholder.1.clone(),
-            },
-            BOOK_RATIO,
-        );
+        let cover = match book
+            .cover_url
+            .as_deref()
+            .and_then(|url| self.covers.get(url))
+        {
+            Some(Cover::Ready(image)) => Image::new(
+                gpui::ElementId::Name(format!("recent-cover-{id}").into()),
+                image.clone(),
+            )
+            .size_full()
+            .rounded(cx.theme().radius(Radius::Md))
+            .into_any_element(),
+            _ => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(cx.theme().colors.sunken)
+                .rounded(cx.theme().radius(Radius::Md))
+                .child(
+                    Icon::new(IconName::BookOpen)
+                        .size(IconSize::Lg)
+                        .color(cx.theme().colors.fg_muted),
+                )
+                .into_any_element(),
+        };
+        let preview = h_flex()
+            .gap_3()
+            .items_start()
+            .child(div().w(rems(3.)).h(rems(4.5)).flex_none().child(cover))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .text_size(cx.theme().text_size(TextSize::Sm))
+                    .text_color(cx.theme().colors.fg_muted)
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().colors.fg)
+                            .child(MiddleEllipsis::new(name)),
+                    )
+                    .child(Ellipsis::new(super::detail::authors(&book.record["book"])))
+                    .child(Ellipsis::new(format!(
+                        "JSON · {}",
+                        format::file_size(metadata.len() as u64, false)
+                    )))
+                    .child(Ellipsis::new(format!(
+                        "Changed {}",
+                        format::relative(date, Timestamp::now())
+                    ))),
+            );
         let keyboard_id = id.clone();
         div()
             .id(gpui::ElementId::Name(format!("recent-card-{id}").into()))

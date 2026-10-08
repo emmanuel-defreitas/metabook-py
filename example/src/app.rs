@@ -105,8 +105,6 @@ pub struct MetabookApp {
     phase: Phase,
     library: Library,
     covers: HashMap<SharedString, Cover>,
-    /// Shared, theme-colored portrait icon for recent books without a cover.
-    preview_placeholder: (gpui::Hsla, Arc<Image>),
     /// Incremented per request; responses for an older index are discarded.
     request_ix: usize,
     _subscriptions: Vec<Subscription>,
@@ -161,7 +159,6 @@ impl MetabookApp {
             phase: Phase::Idle,
             library: Library::Loading,
             covers: HashMap::new(),
-            preview_placeholder: home::book_placeholder(cx),
             request_ix: 0,
             _subscriptions: subscriptions,
         };
@@ -672,9 +669,6 @@ impl MetabookApp {
 impl Render for MetabookApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::theme::synchronize(cx);
-        if self.preview_placeholder.0 != cx.theme().colors.fg_muted {
-            self.preview_placeholder = home::book_placeholder(cx);
-        }
         let content = v_flex()
             .size_full()
             .font_family(cx.theme().font_family.clone())
@@ -682,6 +676,9 @@ impl Render for MetabookApp {
             .text_color(cx.theme().colors.fg)
             .child(
                 AppShell::new()
+                    .when(self.is_home(), |shell| {
+                        shell.title_bar(self.render_home_chrome(window, cx))
+                    })
                     .when(!self.is_home(), |shell| {
                         shell.title_bar(
                             v_flex()
