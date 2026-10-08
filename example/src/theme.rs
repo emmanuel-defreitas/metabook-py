@@ -84,7 +84,7 @@ fn legacy_mode(mode: Mode) -> ThemeMode {
 
 fn map_highlight(highlight: &mut HighlightTheme, p: &Palette, mode: ThemeMode) {
     highlight.appearance = mode;
-    highlight.style.editor_background = Some(p.sunken);
+    highlight.style.editor_background = Some(p.bg);
     highlight.style.editor_foreground = Some(p.fg);
     highlight.style.editor_active_line = Some(p.hover);
     highlight.style.editor_line_number = Some(p.fg_subtle);

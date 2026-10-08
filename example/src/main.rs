@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use ely_gpui_component::theme::ActiveTheme as _;
 use gpui::{
     px, size, App, AppContext as _, AssetSource, Result, SharedString, TitlebarOptions,
-    WindowOptions,
+    WindowAppearance, WindowKind, WindowOptions,
 };
 use gpui_component::Root;
 
@@ -81,10 +81,10 @@ fn main() {
                 // delays clicks while it disambiguates. The traffic lights sit
                 // where Ely leaves room for them.
                 let options = WindowOptions {
+                    kind: WindowKind::Normal,
                     window_min_size: Some(size(px(960.), px(640.))),
                     titlebar: Some(TitlebarOptions {
                         appears_transparent: true,
-
                         traffic_light_position: Some(traffic_light_origin),
                         title: None,
                     }),

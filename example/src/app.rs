@@ -6,23 +6,20 @@
 //! progresses.
 //!
 //! State ownership: `MetabookApp` owns the workflow phase, the form states,
-//! the library filter, and the persisted library. Async requests carry a
+//! and the persisted library. Each completed analysis owns a retained result
+//! explorer for tree/graph/editor coordination. Async requests carry a
 //! request index so a stale response can never overwrite a newer one.
 
 mod components;
 mod detail;
-mod graph;
-mod graph_data;
-mod helpers;
+mod explorer;
 mod home;
 mod loading;
 mod methods;
 mod styles;
 
-use std::collections::{HashMap, HashSet};
-use std::f32::consts::FRAC_PI_2;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,22 +30,17 @@ use ely_gpui_component::shell::TitleBar;
 use ely_gpui_component::theme::{ActiveTheme as _, Mode, Radius, TextSize, Theme as ElyTheme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, radians, AnyElement, AppContext as _, ClipboardItem, Context, ElementId, Entity,
-    HighlightStyle, Image, ImageFormat, InteractiveElement as _, IntoElement, ParentElement,
-    PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
-    Window,
+    div, AnyElement, AppContext as _, Context, Entity, Image, ImageFormat, InteractiveElement as _,
+    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Window,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{EditorState, Position, TextDecoration};
-use gpui_component::list::ListItem;
+use gpui_component::button::Button;
 use gpui_component::select::SelectState;
 use gpui_component::spinner::Spinner;
-use gpui_component::tree::{tree, TreeEvent, TreeState};
-use gpui_component::{h_flex, v_flex, Icon, IconName, Root, Sizable as _};
-use gpui_motion::{MotionExt as _, Spring, Tween};
+use gpui_component::{h_flex, v_flex, Root, Sizable as _};
 
-use crate::api::{self, LibraryBook, NodeSpan, SearchOutcome, SearchPage, TreeNode};
-use helpers::{materialize_items, META_SEPARATOR};
+use crate::api::{self, LibraryBook, SearchOutcome, SearchPage};
+use explorer::ResultExplorer;
 use styles::{DETAIL_OPTIONS, TOKENIZER_DEFAULT_IX, TOKENIZER_OPTIONS};
 
 /// The workflow phase shown in the content region.
@@ -64,26 +56,10 @@ enum Phase {
         page: SearchPage,
     },
     Done {
-        title: SharedString,
-        value: Rc<serde_json::Value>,
-        schema_json: SharedString,
-        /// Node id → location of that node in the JSON document.
-        ranges: HashMap<String, NodeSpan>,
-        /// Node id currently synced to the editor.
-        selected_node: Option<String>,
-        graph_focus: graph_data::Focus,
-        graph_page: usize,
-        /// Source tree; `TreeItem`s are materialised lazily from this as the
-        /// user expands folders, so huge trees cost O(visible), not O(total).
-        tree: Rc<Vec<TreeNode>>,
-        /// Ids currently expanded in the tree.
-        expanded: HashSet<SharedString>,
-        tree_state: Entity<TreeState>,
-        /// Read-only JSON code editor (tree-sitter highlighting, folding).
-        /// `None` while it initialises one frame after the result arrives —
-        /// a skeleton shows in its place so the tree is usable immediately.
-        editor_state: Option<Entity<EditorState>>,
-        decorations: Option<gpui_component::input::TextDecorationCollection>,
+        explorer: Entity<ResultExplorer>,
+        // Graph and copy feedback are composed outside the explorer's own
+        // Render region, so its notifications must also redraw the shell.
+        _subscription: Subscription,
     },
     Failed {
         message: SharedString,
@@ -121,7 +97,6 @@ fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
 pub struct MetabookApp {
     focus: gpui::FocusHandle,
     api_base: SharedString,
-    full_json: bool,
     query: Entity<TextInput>,
     upload_progress: Option<Arc<api::UploadProgress>>,
     tokenizer: Entity<SelectState<Vec<&'static str>>>,
@@ -134,13 +109,6 @@ pub struct MetabookApp {
     preview_placeholder: (gpui::Hsla, Arc<Image>),
     /// Incremented per request; responses for an older index are discarded.
     request_ix: usize,
-    /// True briefly after Copy JSON, driving the button's success feedback.
-    copied: bool,
-    /// Bumped on every tree expansion; keys the entrance animation so only
-    /// the most recently revealed rows animate (no flashing on scroll).
-    expand_gen: u64,
-    /// The folder id expanded most recently.
-    last_expanded: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -185,7 +153,6 @@ impl MetabookApp {
         let mut app = Self {
             focus,
             api_base: api_base.into(),
-            full_json: false,
             query,
             upload_progress: None,
             tokenizer,
@@ -196,9 +163,6 @@ impl MetabookApp {
             covers: HashMap::new(),
             preview_placeholder: home::book_placeholder(cx),
             request_ix: 0,
-            copied: false,
-            expand_gen: 0,
-            last_expanded: None,
             _subscriptions: subscriptions,
         };
         app.refresh_library(cx);
@@ -370,53 +334,11 @@ impl MetabookApp {
             .update(cx, |query, cx| query.set_disabled(false, cx));
         self.phase = match result {
             Ok(SearchOutcome::Analysis(analysis)) => {
-                let tree = Rc::new(analysis.tree);
-                // Everything starts collapsed.
-                let expanded: HashSet<SharedString> = HashSet::new();
-                let items = materialize_items(&tree, &expanded);
-                let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
-                self.full_json = false;
-                self.expand_gen = 0;
-                self.last_expanded = None;
-                // No selection event exists; observe the state and react to
-                // whatever entry is selected after each change. Expansions
-                // emit events, which both materialise the newly revealed
-                // children and drive the row entrance animation.
-                cx.observe_in(&tree_state, window, Self::on_tree_changed)
-                    .detach();
-                cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
-                    this.on_tree_toggle(event, cx);
-                })
-                .detach();
-
-                // Defer the editor: building a rope from a many-megabyte JSON
-                // string blocks the main thread, so paint the result frame
-                // (with a skeleton in the JSON pane) first.
-                let schema_json = SharedString::from(analysis.schema_json);
-                cx.spawn_in(window, {
-                    let schema_json = schema_json.clone();
-                    async move |this, cx| {
-                        this.update_in(cx, |this, window, cx| {
-                            this.init_editor(schema_json, window, cx)
-                        })
-                        .ok();
-                    }
-                })
-                .detach();
-
+                let explorer = cx.new(|cx| ResultExplorer::new(analysis, ix, window, cx));
+                let subscription = cx.observe(&explorer, |_, _, cx| cx.notify());
                 Phase::Done {
-                    title: analysis.title.into(),
-                    value: Rc::new(analysis.value),
-                    schema_json,
-                    ranges: analysis.ranges,
-                    selected_node: None,
-                    graph_focus: graph_data::Focus::Book,
-                    graph_page: 0,
-                    tree,
-                    expanded,
-                    tree_state,
-                    editor_state: None,
-                    decorations: None,
+                    explorer,
+                    _subscription: subscription,
                 }
             }
             Ok(SearchOutcome::Matches(page)) => Phase::Matches { page },
@@ -470,184 +392,6 @@ impl MetabookApp {
             };
         }
         cx.notify();
-    }
-
-    /// One frame after a result arrives, build the JSON editor behind the
-    /// skeleton and swap it in.
-    fn init_editor(
-        &mut self,
-        schema_json: SharedString,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Phase::Done {
-            editor_state,
-            decorations,
-            ..
-        } = &mut self.phase
-        else {
-            return;
-        };
-        if editor_state.is_some() {
-            return;
-        }
-        let state = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language("json")
-                .line_number(true)
-                .folding(true)
-                .default_value(schema_json)
-        });
-        let collection = state.update(cx, |state, cx| {
-            state.set_readonly(true, cx);
-            state.create_decorations_collection(vec![], cx)
-        });
-        *editor_state = Some(state);
-        *decorations = Some(collection);
-        cx.notify();
-    }
-
-    /// Materialise the children of a folder the first time it expands and
-    /// keep the expansion set in sync.
-    fn on_tree_toggle(&mut self, event: &TreeEvent, cx: &mut Context<Self>) {
-        let Phase::Done {
-            tree,
-            expanded,
-            tree_state,
-            ..
-        } = &mut self.phase
-        else {
-            return;
-        };
-        let changed = match event {
-            TreeEvent::Expanded(id) => {
-                self.last_expanded = Some(id.clone());
-                self.expand_gen += 1;
-                expanded.insert(id.clone())
-            }
-            TreeEvent::Collapsed(id) => expanded.remove(id),
-        };
-        if changed {
-            let items = materialize_items(tree, expanded);
-            let selected = tree_state.read(cx).selected_index();
-            tree_state.update(cx, |state, cx| {
-                state.set_items(items, cx);
-                state.set_selected_index(selected, cx);
-            });
-            cx.notify();
-        }
-    }
-
-    /// Collapse every folder in the tree at once.
-    fn collapse_all(&mut self, cx: &mut Context<Self>) {
-        let Phase::Done {
-            tree,
-            expanded,
-            tree_state,
-            ..
-        } = &mut self.phase
-        else {
-            return;
-        };
-        if expanded.is_empty() {
-            return;
-        }
-        expanded.clear();
-        self.last_expanded = None;
-        let items = materialize_items(tree, expanded);
-        tree_state.update(cx, |state, cx| state.set_items(items, cx));
-        cx.notify();
-    }
-
-    /// After any tree change, sync the JSON editor to the selected node:
-    /// move the cursor to its first line (scrolling it into view) and
-    /// decorate its byte range with a highlight.
-    fn on_tree_changed(
-        &mut self,
-        state: Entity<TreeState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let selected_id = state
-            .read(cx)
-            .selected_entry()
-            .map(|entry| entry.item().id.to_string());
-        self.select_structure_node(selected_id, window, cx);
-    }
-
-    fn select_structure_node(
-        &mut self,
-        selected_id: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let highlight_bg = cx.theme().colors.selection;
-        let Phase::Done {
-            ranges,
-            selected_node,
-            graph_focus,
-            graph_page,
-            editor_state,
-            decorations,
-            ..
-        } = &mut self.phase
-        else {
-            return;
-        };
-        if *selected_node == selected_id {
-            return;
-        }
-        *selected_node = selected_id.clone();
-        *graph_focus = graph_data::Focus::Structure(selected_id.clone());
-        *graph_page = 0;
-        cx.notify();
-        let (Some(editor_state), Some(decorations)) = (editor_state.clone(), decorations.clone())
-        else {
-            return;
-        };
-        let span = selected_id.and_then(|id| ranges.get(&id).cloned());
-        if let Some(span) = span {
-            editor_state.update(cx, |state, cx| {
-                // The cursor stops at a fold boundary if the span is inside
-                // one; unfold just the folds containing the span first.
-                let position = Position::new(span.line as u32, 0);
-                state.unfold_at(position, cx);
-                state.set_cursor_position(position, window, cx);
-            });
-            decorations.set(
-                vec![TextDecoration::new(
-                    span.bytes,
-                    HighlightStyle {
-                        background_color: Some(highlight_bg),
-                        ..Default::default()
-                    },
-                )],
-                cx,
-            );
-        } else {
-            decorations.set(Vec::new(), cx);
-        }
-        cx.notify();
-    }
-
-    fn copy_schema(&mut self, cx: &mut Context<Self>) {
-        if let Phase::Done { schema_json, .. } = &self.phase {
-            cx.write_to_clipboard(ClipboardItem::new_string(schema_json.to_string()));
-            self.copied = true;
-            cx.notify();
-            // Revert the button's success state after a beat.
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(1400))
-                    .await;
-                this.update(cx, |this, cx| {
-                    this.copied = false;
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
-        }
     }
 
     /// Reload the persisted library in the background.
@@ -755,7 +499,7 @@ impl MetabookApp {
     /// The work area. Idle shows the library (its own scroll owner, so the
     /// scrollbar sits at the panel edge); every other phase is a page inside
     /// the shared content inset.
-    fn render_content(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+    fn render_content(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         match &self.phase {
             Phase::Idle => self.render_home(window, cx),
             Phase::Processing {
@@ -922,112 +666,6 @@ impl MetabookApp {
                     .on_click(cx.listener(|this, _, _, cx| this.show_dashboard(cx))),
             ),
         )
-    }
-
-    fn render_structure_tree(
-        &self,
-        tree_state: Entity<TreeState>,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .pr_3()
-            .child(
-                h_flex().justify_end().pb_1().child(
-                    Button::new("collapse-all")
-                        .ghost()
-                        .small()
-                        .icon(IconName::ChevronsUpDown)
-                        .label("Collapse all")
-                        .on_click(cx.listener(|this, _, _, cx| this.collapse_all(cx))),
-                ),
-            )
-            .child(div().flex_1().min_h_0().child(tree(&tree_state, {
-                let expand_gen = self.expand_gen;
-                let last_expanded = self.last_expanded.clone();
-                move |ix, entry, selected, _, cx| {
-                    let id = entry.item().id.clone();
-                    let expanded = entry.is_expanded();
-
-                    // The chevron animates toward its rotation target, so it
-                    // renders settled when rows scroll into view and only
-                    // animates on an actual toggle — no flashing.
-                    let icon = if entry.is_folder() {
-                        let target = if expanded { 1.0f32 } else { 0.0 };
-                        div()
-                            .with_motion(
-                                ElementId::Name(format!("chev-{id}").into()),
-                                target,
-                                Spring::from_duration(0.2),
-                                |wrapper, t: f32| {
-                                    wrapper.child(
-                                        Icon::new(IconName::ChevronRight)
-                                            .small()
-                                            .rotate(radians(t * FRAC_PI_2)),
-                                    )
-                                },
-                            )
-                            .into_any_element()
-                    } else {
-                        Icon::new(IconName::File).small().into_any_element()
-                    };
-
-                    // The materialised label carries the node's counts behind
-                    // META_SEPARATOR ("Paragraph 1␟2 sentences · 24 words ·
-                    // 31 tokens"): the name truncates while the counts render
-                    // as muted text that never shrinks, so token counts
-                    // survive a narrow panel.
-                    let label = entry.item().label.clone();
-                    let (name, counts) = match label.split_once(META_SEPARATOR) {
-                        Some((name, counts)) => (name.to_string(), Some(counts.to_string())),
-                        None => (label.to_string(), None),
-                    };
-                    let content = h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(icon)
-                        .child(
-                            div()
-                                .text_size(cx.theme().text_size(TextSize::Sm))
-                                .truncate()
-                                .child(name),
-                        )
-                        .when_some(counts, |row, counts| {
-                            row.child(
-                                div()
-                                    .flex_none()
-                                    .text_size(cx.theme().text_size(TextSize::Xs))
-                                    .text_color(cx.theme().colors.fg_muted)
-                                    .child(counts),
-                            )
-                        });
-
-                    // Only rows revealed by the latest expansion animate in;
-                    // everything else renders statically (scrolling never
-                    // replays an entrance animation).
-                    let just_revealed = last_expanded.as_ref().is_some_and(|parent| {
-                        id.starts_with(&format!("{parent}.")) && id.as_ref() != parent.as_ref()
-                    });
-
-                    let item = ListItem::new(ix)
-                        .selected(selected)
-                        .pl(px(16.) * entry.depth() as f32 + px(4.));
-                    if just_revealed {
-                        item.child(
-                            content
-                                .with_motion(
-                                    ElementId::Name(format!("reveal-{expand_gen}-{id}").into()),
-                                    1.0f32,
-                                    Tween::new(0.18),
-                                    |row, t: f32| row.opacity(t),
-                                )
-                                .initial(0.0),
-                        )
-                    } else {
-                        item.child(content)
-                    }
-                }
-            })))
     }
 }
 
