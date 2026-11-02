@@ -27,6 +27,7 @@ from metabook_py.services.documents import fetch as doc_fetch
 from metabook_py.services.documents.blocks import Block, BlockType, heading
 from metabook_py.services.documents.builder import build_document_structure
 from metabook_py.services.documents.service import analyze_document, resolve_format
+from metabook_py.services.native import active_parser
 
 FIXTURES = Path(__file__).parent / "fixtures" / "documents"
 
@@ -415,7 +416,7 @@ async def test_analyze_upload_endpoint(client, name):
     body = resp.json()
     assert body["structure"]["totals"] == EXPECTED[name]
     assert body["document"]["filename"] == name
-    assert body["meta"]["parser"] == "python"
+    assert body["meta"]["parser"] == active_parser()
     assert _long_strings(body) == []
 
 

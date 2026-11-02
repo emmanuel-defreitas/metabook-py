@@ -29,6 +29,11 @@ dependencies = [
 
 [project.optional-dependencies]
 tf = ["text-fabric>=13"]
+# Native parsing core (rust/metabook_core). Enable with METABOOK_PARSER=rust.
+rust = ["metabook-core"]
+
+[tool.uv.sources]
+metabook-core = { path = "rust/metabook_core" }
 
 [tool.vercel]
 entrypoint = "src.metabook_py.main:app"
@@ -48,6 +53,7 @@ dev = [
     "ruff>=0.15.20",
     "mypy>=2.1.0",
     "respx>=0.21.0",
+    "maturin>=1.16.0",
 ]
 
 [tool.ruff]

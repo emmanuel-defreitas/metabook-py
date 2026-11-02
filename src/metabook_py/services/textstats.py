@@ -9,11 +9,16 @@ Rules
 - Sentence : split on [.!?] followed by whitespace + an uppercase letter or
              opening quote, with common abbreviations ("Mr.", "etc.") protected.
 - Word     : any token matching \\b[a-zA-Z0-9]+\\b.
+
+With METABOOK_PARSER=rust these delegate to metabook_core (identical output,
+enforced by tests/test_parity.py).
 """
 
 from __future__ import annotations
 
 import re
+
+from metabook_py.services.native import native_core
 
 ABBREVIATIONS = frozenset(
     w.lower()
@@ -44,6 +49,12 @@ def _protect(match: re.Match[str]) -> str:
 
 def split_sentences(text: str) -> list[str]:
     """Split a block of prose into sentences, protecting abbreviations."""
+    if (core := native_core()) is not None:
+        return core.split_sentences(text)
+    return _split_sentences_py(text)
+
+
+def _split_sentences_py(text: str) -> list[str]:
     protected = _ABBREV_CANDIDATE.sub(_protect, text)
     parts = SENTENCE_BOUNDARY.split(protected)
     return [s.replace(_PLACEHOLDER, ".").strip() for s in parts if s.strip()]
@@ -51,10 +62,14 @@ def split_sentences(text: str) -> list[str]:
 
 def count_sentences(text: str) -> int:
     """Sentence count of a non-empty prose block (at least 1), 0 for blank text."""
+    if (core := native_core()) is not None:
+        return core.count_sentences(text)
     if not text.strip():
         return 0
-    return max(1, len(split_sentences(text)))
+    return max(1, len(_split_sentences_py(text)))
 
 
 def count_words(text: str) -> int:
+    if (core := native_core()) is not None:
+        return core.count_words(text)
     return len(_WORD.findall(text))

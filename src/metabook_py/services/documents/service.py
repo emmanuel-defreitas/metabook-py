@@ -24,6 +24,7 @@ from metabook_py.models.document import (
 )
 from metabook_py.services.documents.blocks import Block
 from metabook_py.services.documents.builder import build_document_structure
+from metabook_py.services.native import active_parser, native_core
 
 CONTENT_TYPES: dict[str, DocumentFormat] = {
     "text/html": "html",
@@ -97,8 +98,21 @@ def parse_blocks(data: bytes, fmt: DocumentFormat) -> tuple[list[Block], int | N
     return parse_text(text), None
 
 
-def parser_name() -> str:
-    return "python"
+def _block_tuple(block: Block) -> tuple:
+    return (str(block.type), block.text, block.level, [_block_tuple(c) for c in block.children])
+
+
+def build_structure(fmt: DocumentFormat, data: bytes) -> tuple[DocumentStructure, int | None]:
+    """Adapter + structure builder, on the active parser backend."""
+    core = native_core()
+    if core is not None and fmt in ("markdown", "text"):
+        return DocumentStructure.model_validate_json(core.analyze_json(fmt, _decode(data))), None
+    blocks, page_count = parse_blocks(data, fmt)
+    if core is not None:
+        payload = core.build_structure_json([_block_tuple(b) for b in blocks])
+        return DocumentStructure.model_validate_json(payload), page_count
+    sections, totals = build_document_structure(blocks)
+    return DocumentStructure(totals=totals, sections=sections), page_count
 
 
 def analyze_document(
@@ -118,8 +132,7 @@ def analyze_document(
     fmt, ctype = resolve_format(content_type, filename or source_url)
 
     t0 = time.monotonic()
-    blocks, page_count = parse_blocks(data, fmt)
-    sections, totals = build_document_structure(blocks)
+    structure, page_count = build_structure(fmt, data)
     processing_ms = int((time.monotonic() - t0) * 1000)
 
     return DocumentAnalysisResponse(
@@ -132,9 +145,9 @@ def analyze_document(
             filename=filename,
             source_url=source_url,
         ),
-        structure=DocumentStructure(totals=totals, sections=sections),
+        structure=structure,
         meta=DocumentMeta(
-            parser=parser_name(),  # type: ignore[arg-type]
+            parser=active_parser(),  # type: ignore[arg-type]
             processing_time_ms=processing_ms,
             analyzed_at=datetime.now(UTC),
         ),
