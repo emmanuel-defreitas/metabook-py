@@ -239,19 +239,59 @@ curl -L -o .cache/bench/pg1022.txt https://www.gutenberg.org/cache/epub/1022/pg1
 uv run python scripts/bench_parser.py
 ```
 
-Medians of 5 runs, Python 3.13, Apple Silicon:
-
-| Text | Parse (before → after) | Full request, cold cache (before → after) | Parse share of request |
-|------|------------------------|-------------------------------------------|------------------------|
-| King James Bible (PG 10, 4.3 MB) | 1,033 → 622 ms | 1,125 → 662 ms | 90% → 84% |
-| *Walking*, Thoreau (PG 1022, 87 KB) | 13.2 → 6.5 ms | 36 → 29 ms | 37% → 20% |
-
-"Before" is v3.1.0. "After" adds a set-lookup abbreviation regex in the shared
+Medians of 5 runs, Python 3.13, Apple Silicon (arm64). "v3.1.0" is the
+original parser; "Python" adds a set-lookup abbreviation regex in the shared
 sentence splitter (the top hotspot: 46% of KJV parse time) and preprocesses
-text once per request instead of three times. Responses are byte-identical.
-The remaining KJV cost is regex work in sentence and verse splitting, which a
-native parsing core would target. Real network adds ~1 s to a cold KJV request
-(4.3 MB download), so in production parse share is ~50% cold and ~90% cached.
+once per request instead of three times; "Rust" is `METABOOK_PARSER=rust`.
+Book responses are byte-identical across all three.
+
+| Book | Metric | v3.1.0 | Python | Rust |
+|------|--------|-------:|-------:|-----:|
+| King James Bible (PG 10, 4.3 MB) | parse | 1,033 ms | 622 ms | 500 ms |
+| | full request, cold cache | 1,125 ms | 662 ms | 526 ms |
+| *Walking*, Thoreau (PG 1022, 87 KB) | parse | 13.2 ms | 6.5 ms | 4.4 ms |
+| | full request, cold cache | 36 ms | 29 ms | 26 ms |
+
+With the Rust core, sentence splitting and word counting drop to ~25 ms of
+KJV parse time. What remains is book-specific Python (verse/chapter splitting
+~180 ms, schema detection ~70 ms, preprocessing ~55 ms per pass), which the
+core does not cover yet. Real network adds ~1 s to a cold KJV request
+(4.3 MB download).
+
+Single-document analysis (`analyze_document`, best of 3):
+
+| Input | Python | Rust |
+|-------|-------:|-----:|
+| KJV as `text/plain` (4.3 MB) | 246 ms | 44 ms |
+| `paper.md` × 2000 (2.4 MB) | 373 ms | 164 ms |
+
+## 🦀 Native parsing core
+
+`rust/metabook_core` is a Rust port of the shared tokenizer (sentences,
+words), the plain-text and Markdown adapters, and the section-tree builder,
+exposed to Python with PyO3 and built with maturin. HTML and PDF stay on their
+Python adapters and hand their block trees to the Rust builder.
+
+```bash
+make rust                       # uv sync --extra rust + build the CLI
+METABOOK_PARSER=rust make dev   # serve with the native core
+make rust-test                  # cargo test/clippy + pytest under both parsers
+```
+
+- `METABOOK_PARSER=python|rust` (default `python`; the Docker image defaults to
+  `rust`). If `rust` is set but the extension isn't installed, the Python
+  implementation runs and a warning is logged. Single-document responses report
+  the backend that ran in `meta.parser`; book responses are unchanged.
+- `tests/test_parity.py` asserts identical output from both backends on every
+  fixture, edge cases, 120 seeded random documents, every book fixture at every
+  detail level, and the full KJV. The port reproduces Python's `\s`, `\w`/`\b`
+  and `isalpha` definitions, which differ from Rust's on characters such as
+  `²` and U+001C–U+001F.
+- A small CLI prints the same JSON for Markdown and plain-text files:
+
+```bash
+rust/metabook_core/target/release/metabook analyze tests/fixtures/documents/paper.md
+```
 
 ## 🖥️ Desktop example (GPUI)
 
