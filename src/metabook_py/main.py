@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from metabook_py.core.config import settings
 from metabook_py.core.version import package_version
 from metabook_py.routers.books import router as books_router
+from metabook_py.routers.documents import router as documents_router
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,7 @@ app.add_middleware(
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 app.include_router(books_router, prefix="/api")
+app.include_router(documents_router, prefix="/api")
 
 
 @app.get("/health", tags=["meta"])

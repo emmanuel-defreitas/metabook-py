@@ -51,7 +51,9 @@ mcp = FastMCP(
         "Use 'search_book_structure' to analyse the structural metadata of any "
         "Project Gutenberg book by title, ISBN, or Gutenberg ID. "
         "Use 'upload_book_epub' to store and analyse your own EPUB file. "
-        "Use 'list_supported_schemas' to see which structural types are recognised."
+        "Use 'list_supported_schemas' to see which structural types are recognised. "
+        "Use 'analyze_document' for the section structure of a single HTML, "
+        "Markdown, PDF or plain-text document."
     ),
 )
 
@@ -279,3 +281,48 @@ async def list_supported_schemas() -> list[dict]:
     search_book_structure responses.
     """
     return list(SCHEMA_DEFINITIONS.values())
+
+
+@mcp.tool()
+async def analyze_document(
+    document_base64: str | None = None,
+    url: str | None = None,
+    content_type: str | None = None,
+    filename: str | None = None,
+) -> dict:
+    """
+    Analyse one paper or page (HTML, Markdown, PDF or plain text) and return
+    its semantic structure: sections nested by heading level (content before
+    the first heading in a level-0 preamble), with counts of headings,
+    paragraphs, lists, tables, figures, code blocks, quotes, footnotes,
+    references, links, sentences and words per section and in total.
+    No text content is returned.
+
+    Provide the document one of two ways (exactly one is required):
+
+    document_base64  the file's bytes, base64-encoded (max 20 MB); give
+                     content_type (e.g. "text/markdown") or a filename with an
+                     extension (.html, .md, .pdf, .txt)
+    url              a public http(s) URL (10 s timeout, private addresses refused)
+    """
+    from metabook_py.routers.documents import to_http_error
+    from metabook_py.services.documents import service
+
+    if (document_base64 is None) == (url is None):
+        return {"error": "Provide exactly one of: document_base64, url."}
+    try:
+        if url is not None:
+            result = await service.analyze_document_url(url)
+        else:
+            try:
+                data = base64.b64decode(document_base64 or "", validate=True)
+            except (binascii.Error, ValueError):
+                return {"error": "invalid_base64"}
+            result = service.analyze_document(data, content_type=content_type, filename=filename)
+    except Exception as exc:
+        try:
+            http = to_http_error(exc)
+        except Exception:
+            raise exc from None
+        return {"status": http.status_code, **http.detail}  # type: ignore[dict-item]
+    return result.model_dump(mode="json")

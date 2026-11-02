@@ -40,6 +40,7 @@ your .epub ──► Vercel Blob ──► package doc + spine XHTML ───�
 - **🧬 Schema detection** — classifies each book as `scripture`, `sectioned_book`, `standard_book`, `essay_collection`, or `flat`, with a confidence rating
 - **🔢 Counts, not content** — chapters, paragraphs, sentences, clauses, and words per node; a word node is just its index. **No book text is ever included in a response**
 - **📤 Bring your own EPUB** — `POST /api/books/upload` stores the file in Vercel Blob and analyses it with the same pipeline
+- **📄 Single documents** — analyse one paper or page (HTML, Markdown, PDF, plain text) into a section tree with counts per section ([schema](docs/single-document-schema.md))
 - **🔌 Two interfaces, one service layer** — a FastAPI REST API and a FastMCP server share the same core
 - **🖥️ Native desktop client** — a GPUI example app with an animated structure tree and a synced JSON code editor
 
@@ -140,6 +141,66 @@ export MONGODB_URI=mongodb://localhost:27017
 
 Browse what's stored via `GET /api/books/uploads`.
 
+### Single documents
+
+Analyse one HTML, Markdown, PDF or plain-text document. Sections nest by
+heading level (skipped levels nest directly; content before the first heading
+goes in a level-0 preamble), and every section carries its own `counts` plus
+`totals` for its subtree. Sentences and words use the same tokenizer as the
+book endpoints. Full rules: [`docs/single-document-schema.md`](docs/single-document-schema.md).
+
+```bash
+curl -F "file=@paper.pdf" http://127.0.0.1:8000/api/documents/analyze
+curl -H "content-type: application/json" -d '{"url": "https://example.com/post.html"}' \
+  http://127.0.0.1:8000/api/documents/analyze-url
+```
+
+Limits: 20 MB, `text/html`, `application/xhtml+xml`, `text/markdown`,
+`application/pdf`, `text/plain` only (extension used for
+`application/octet-stream`). URL fetches time out after 10 s and refuse
+private, loopback, link-local and other non-public addresses, re-checked on
+every redirect.
+
+Example — this Markdown:
+
+```markdown
+Draft, see https://example.org.
+
+# Results
+
+We measured it. It worked.
+
+### Detail
+
+- One
+- Two
+```
+
+returns (zero counts omitted here for brevity; the API returns every field):
+
+```jsonc
+{
+  "document": { "format": "markdown", "content_type": "text/markdown", "size_bytes": 96,
+                "sha256": "e8fe6210…", "page_count": null, "filename": "notes.md", "source_url": null },
+  "structure": {
+    "totals": { "headings": 2, "paragraphs": 2, "lists": 1, "list_items": 2, "links": 1,
+                "sentences": 5, "words": 12, "sections": 3, "max_depth": 2 },
+    "sections": [
+      { "kind": "preamble", "level": 0, "index": 0, "path": "0",
+        "counts": { "paragraphs": 1, "links": 1, "sentences": 1, "words": 5 }, "children": [] },
+      { "kind": "section", "level": 1, "index": 1, "path": "1",
+        "counts": { "headings": 1, "paragraphs": 1, "sentences": 2, "words": 5 },
+        "totals": { "headings": 2, "paragraphs": 1, "lists": 1, "list_items": 2, "sentences": 4, "words": 7 },
+        "children": [
+          { "kind": "section", "level": 3, "index": 1, "path": "1.1",
+            "counts": { "headings": 1, "lists": 1, "list_items": 2, "sentences": 2, "words": 2 },
+            "children": [] } ] } ]
+  },
+  "meta": { "schema_version": "1.0", "parser": "python", "processing_time_ms": 1,
+            "analyzed_at": "2026-11-02T13:01:11Z" }
+}
+```
+
 ## 🌐 REST API
 
 | Method | Endpoint | Purpose |
@@ -148,19 +209,49 @@ Browse what's stored via `GET /api/books/uploads`.
 | `GET` | `/api/books/structure/schemas` | List the supported structural schemas |
 | `POST` | `/api/books/upload` | Upload an EPUB and analyse it |
 | `GET` | `/api/books/uploads` | List persisted upload documents (needs `MONGODB_URI`) |
+| `POST` | `/api/documents/analyze` | Analyse one uploaded document (multipart `file`) |
+| `POST` | `/api/documents/analyze-url` | Fetch a public URL (`{"url": …}`) and analyse it |
 | `GET` | `/health` | Liveness + cache stats |
 
 Interactive OpenAPI docs live at `/api/docs`.
 
 ## 🤖 MCP server
 
-A [FastMCP](https://gofastmcp.com) server is mounted at `/mcp`, so agents can use the same service layer through three tools:
+A [FastMCP](https://gofastmcp.com) server is mounted at `/mcp`, so agents can use the same service layer through four tools:
 
 | Tool | Description |
 |------|-------------|
 | `search_book_structure` | Analyse a book by title, ISBN, or Gutenberg ID |
 | `upload_book_epub` | Analyse an EPUB passed as base64 or a URL |
 | `list_supported_schemas` | Enumerate the structural schemas |
+| `analyze_document` | Analyse one HTML / Markdown / PDF / text document (base64 or URL) |
+
+## ⏱️ Parser benchmark
+
+`scripts/bench_parser.py` times the parser on locally cached Gutenberg texts
+(no Gutendex calls), runs a full in-process request with the network mocked,
+and prints a cProfile of the top hotspots:
+
+```bash
+mkdir -p .cache/bench
+curl -L -o .cache/bench/pg10.txt   https://www.gutenberg.org/cache/epub/10/pg10.txt
+curl -L -o .cache/bench/pg1022.txt https://www.gutenberg.org/cache/epub/1022/pg1022.txt
+uv run python scripts/bench_parser.py
+```
+
+Medians of 5 runs, Python 3.13, Apple Silicon:
+
+| Text | Parse (before → after) | Full request, cold cache (before → after) | Parse share of request |
+|------|------------------------|-------------------------------------------|------------------------|
+| King James Bible (PG 10, 4.3 MB) | 1,033 → 622 ms | 1,125 → 662 ms | 90% → 84% |
+| *Walking*, Thoreau (PG 1022, 87 KB) | 13.2 → 6.5 ms | 36 → 29 ms | 37% → 20% |
+
+"Before" is v3.1.0. "After" adds a set-lookup abbreviation regex in the shared
+sentence splitter (the top hotspot: 46% of KJV parse time) and preprocesses
+text once per request instead of three times. Responses are byte-identical.
+The remaining KJV cost is regex work in sentence and verse splitting, which a
+native parsing core would target. Real network adds ~1 s to a cold KJV request
+(4.3 MB download), so in production parse share is ~50% cold and ~90% cached.
 
 ## 🖥️ Desktop example (GPUI)
 
