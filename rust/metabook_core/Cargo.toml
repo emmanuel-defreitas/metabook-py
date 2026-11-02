@@ -1,0 +1,30 @@
+[package]
+name = "metabook_core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"  # let-chains
+description = "Native parsing core for metabook: shared tokenizer, block tree, structure builder"
+license = "MIT"
+publish = false
+
+[lib]
+name = "metabook_core"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "metabook"
+path = "src/bin/metabook.rs"
+
+[dependencies]
+pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py313"], optional = true }
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[features]
+# Built by maturin for the Python extension; the CLI and `cargo test` don't need it.
+python = ["dep:pyo3"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
