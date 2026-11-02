@@ -23,7 +23,6 @@ call:
 import base64
 import binascii
 
-import httpx
 from fastmcp import FastMCP
 
 from metabook_py.core.config import settings
@@ -31,19 +30,25 @@ from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BlobUploadError,
     BookNotFoundError,
+    DocumentFetchError,
+    DocumentTooLargeError,
     GutendexUnavailableError,
     InvalidEpubError,
     TextUnavailableError,
+    UrlNotAllowedError,
 )
 from metabook_py.models.book import AuthorInfo, UploadedBookInfo
 from metabook_py.services.blob import upload_epub
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect_schema
 from metabook_py.services.discovery import GutendexClient
+from metabook_py.services.documents.fetch import fetch_url
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
 from metabook_py.services.preprocessing import preprocess_text
 from metabook_py.services.store import get_upload_store, scan_update_doc, upload_doc
+
+EPUB_FETCH_TIMEOUT = 60.0  # seconds, whole download
 
 mcp = FastMCP(
     name="Book Structure MCP",
@@ -208,13 +213,20 @@ async def upload_book_epub(
         except (binascii.Error, ValueError):
             return {"error": "invalid_base64", "hint": "epub_base64 is not valid base64."}
     else:
+        # Same SSRF rules as analyze-url: public addresses only, every
+        # redirect re-checked, body capped while streaming.
         try:
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                resp = await client.get(epub_url)  # type: ignore[arg-type]
-                resp.raise_for_status()
-                content = resp.content
-        except httpx.HTTPError as exc:
-            return {"error": "download_failed", "url": epub_url, "detail": str(exc)}
+            content, _, _ = await fetch_url(
+                epub_url,  # type: ignore[arg-type]
+                max_bytes=settings.max_upload_bytes,
+                timeout=EPUB_FETCH_TIMEOUT,
+            )
+        except UrlNotAllowedError as exc:
+            return {"error": "url_not_allowed", "url": epub_url, "detail": exc.reason}
+        except DocumentTooLargeError:
+            return {"error": "file_too_large", "max_bytes": settings.max_upload_bytes}
+        except DocumentFetchError as exc:
+            return {"error": "download_failed", "url": epub_url, "detail": exc.reason}
 
     if len(content) > settings.max_upload_bytes:
         return {"error": "file_too_large", "max_bytes": settings.max_upload_bytes}
