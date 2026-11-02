@@ -47,6 +47,7 @@ from metabook_py.services.detector import (
     SchemaType,
 )
 from metabook_py.services.preprocessing import preprocess_text
+from metabook_py.services.textstats import count_words, split_sentences
 
 # Detail levels for the depth of leaf nesting, shallow → deep.
 DETAIL_LEVELS = ("paragraph", "sentence", "clause", "word")
@@ -54,33 +55,12 @@ DETAIL_LEVELS = ("paragraph", "sentence", "clause", "word")
 # An encoder maps a text span → its token count (special tokens excluded).
 Encoder = Callable[[str], int]
 
-# ── Sentence-splitting ─────────────────────────────────────────────────────────
+# ── Sentence-splitting / word counting ─────────────────────────────────────────
+# Shared with the single-document analyzer (services/textstats.py) so both
+# count sentences and words identically. Private aliases kept for callers.
 
-_ABBREVS = re.compile(
-    r"\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|Rev|Gen|Col|Maj|Sgt|Cpl|Lt|Cmdr|Adm|"
-    r"Gov|Sen|Rep|St|Ave|Blvd|Dept|est|approx|vol|no|pp|fig|"
-    r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec|"
-    r"Inc|Ltd|Corp|Bros|Co|vs|etc|al|ibid|op|cit)\.",
-    re.IGNORECASE,
-)
-_PLACEHOLDER = "<!P!>"
-# Python's re module requires fixed-width look-behinds, so we match on the
-# punctuation character itself (no trailing quote in look-behind).
-# Sentences ending with ." or !' are still split correctly because the
-# space after the closing quote triggers the look-behind on the quote itself
-# — which is covered by the forward split on whitespace + uppercase.
-_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"\u2018\u201C])")
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split a paragraph into sentences, protecting abbreviations."""
-    protected = _ABBREVS.sub(lambda m: m.group(0).replace(".", _PLACEHOLDER), text)
-    parts = _SENTENCE_BOUNDARY.split(protected)
-    return [s.replace(_PLACEHOLDER, ".").strip() for s in parts if s.strip()]
-
-
-def _count_words(text: str) -> int:
-    return len(re.findall(r"\b[a-zA-Z0-9]+\b", text))
+_split_sentences = split_sentences
+_count_words = count_words
 
 
 def _sum_tokens(nodes: list) -> int:
@@ -571,6 +551,7 @@ def build_structure_tree(
     include_paragraphs: bool = True,
     detail: str = "paragraph",
     encoder: Encoder | None = None,
+    preprocessed: bool = False,
 ) -> tuple[list, StructureSummary]:
     """
     Build and return (nodes, summary) for *text* according to *schema*.
@@ -584,8 +565,13 @@ def build_structure_tree(
     count; every node then carries a token count alongside its word count,
     and parent totals are sums of their children. When None (the default),
     no token counts are computed and the output is unchanged.
+
+    Pass *preprocessed=True* when *text* already went through preprocess_text
+    (e.g. the cached output of fetch_book_text) to skip a redundant pass.
+    Preprocessing is idempotent, so the result is the same either way.
     """
-    text = preprocess_text(text)
+    if not preprocessed:
+        text = preprocess_text(text)
     dispatch: dict[SchemaType, Callable[[], tuple[list, StructureSummary]]] = {
         SchemaType.CANONICAL_SCRIPTURE: lambda: _build_scripture(
             text, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder

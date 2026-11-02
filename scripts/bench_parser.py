@@ -185,11 +185,13 @@ def bench_request(gid: int, raw_bytes: bytes, repeat: int, *, cold: bool) -> tup
     # Patch the names the request path actually calls.
     originals = (
         fetcher.preprocess_text,
+        books_router.preprocess_text,
         books_router.detect_schema,
         books_router.build_structure_tree,
     )
     rate = settings.rate_limit_per_second
     fetcher.preprocess_text = timer.wrap("fetch.preprocess", fetcher.preprocess_text)
+    books_router.preprocess_text = timer.wrap("router.preprocess", books_router.preprocess_text)
     books_router.detect_schema = timer.wrap("detect (incl. preprocess)", detect_schema)
     books_router.build_structure_tree = timer.wrap("build (incl. preprocess)", build_structure_tree)
     settings.rate_limit_per_second = 1e9  # the 1 req/s limiter would dominate cold runs
@@ -198,6 +200,7 @@ def bench_request(gid: int, raw_bytes: bytes, repeat: int, *, cold: bool) -> tup
     finally:
         (
             fetcher.preprocess_text,
+            books_router.preprocess_text,
             books_router.detect_schema,
             books_router.build_structure_tree,
         ) = originals

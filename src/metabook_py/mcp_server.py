@@ -42,6 +42,7 @@ from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
+from metabook_py.services.preprocessing import preprocess_text
 from metabook_py.services.store import get_upload_store, scan_update_doc, upload_doc
 
 mcp = FastMCP(
@@ -139,9 +140,11 @@ async def search_book_structure(
             "hint": "The book exists on Gutenberg but its plain-text file could not be retrieved.",
         }
 
-    schema = detect_schema(text, schema_override=schema_override)
+    # Preprocess once here; detect and build then skip their own passes.
+    text = preprocess_text(text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
-        text, schema, include_paragraphs=include_paragraphs, detail=detail
+        text, schema, include_paragraphs=include_paragraphs, detail=detail, preprocessed=True
     )
 
     await store.record_scan(book_info.gutenberg_id, scan_update_doc(schema, detail, summary, None))
@@ -224,9 +227,10 @@ async def upload_book_epub(
     except BlobUploadError as exc:
         return {"error": "blob_upload_failed", "detail": exc.reason}
 
-    schema = detect_schema(parsed.text, schema_override=schema_override)
+    text = preprocess_text(parsed.text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
-        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail
+        text, schema, include_paragraphs=include_paragraphs, detail=detail, preprocessed=True
     )
 
     uploaded_book = UploadedBookInfo(
