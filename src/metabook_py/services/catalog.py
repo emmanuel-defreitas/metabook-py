@@ -131,7 +131,7 @@ class CatalogSearchService:
                     f"{OPENALEX_MAX_PAGE} (10,000-result limit). Narrow the query or filters."
                 )
 
-        types = ("book",) if "book" in kinds else ()
+        types: tuple[str, ...] = ("book",) if "book" in kinds else ()
         if "academic" in kinds:
             types += _ACADEMIC_TYPES
         if "other" in kinds:
