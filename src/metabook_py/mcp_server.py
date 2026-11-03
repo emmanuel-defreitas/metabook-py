@@ -9,10 +9,10 @@ Exposes three tools that wrap the exact same service layer used by the REST API:
 
 Mounting
 --------
-In main.py the MCP server is mounted on the FastAPI app at /mcp so it can be
-reached via HTTP (SSE transport) alongside the REST endpoints:
+In main.py the MCP server is mounted on the FastAPI app at /api/mcp (with /mcp
+kept as an alias) so it can be reached via HTTP alongside the REST endpoints:
 
-    app.mount("/mcp", mcp.http_app(path="/"))
+    app.mount("/api/mcp", mcp.http_app(path="/"))
 
 If you prefer to run it on stdio (e.g. for local Claude Desktop integration),
 call:
