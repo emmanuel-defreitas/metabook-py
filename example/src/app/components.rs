@@ -1,9 +1,17 @@
 //! Sketch library layout, using persisted records and the shared Ely palette.
+
+mod file_preview;
+mod score;
+mod search_filters;
+mod theme_toggle;
+
+pub(super) use file_preview::MFilePreview;
+pub(super) use score::{render_score, schema_score};
+
 use super::detail::{authors, field, language};
 use super::{Cover, MetabookApp, Phase};
-use ely_gpui_component::buttons::{Button, ButtonVariant, IconButton};
+use ely_gpui_component::buttons::{Button, ButtonVariant};
 use ely_gpui_component::data_display::{Badge, Tone};
-use ely_gpui_component::forms::SearchInput;
 use ely_gpui_component::primitives::IconName as ElyIconName;
 use ely_gpui_component::theme::{ActiveTheme as _, ControlSize, Radius, TextSize};
 use gpui::prelude::FluentBuilder as _;
@@ -12,76 +20,11 @@ use gpui::{
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
 };
 use gpui_component::skeleton::Skeleton;
-use gpui_component::{h_flex, v_flex, Icon, IconName, Sizable as _, StyledExt as _};
+use gpui_component::{v_flex, Icon, IconName, Sizable as _, StyledExt as _};
 
 impl MetabookApp {
     pub(super) fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
-        h_flex()
-            .w_full()
-            .h(rems(3.5))
-            .flex_none()
-            .items_center()
-            .border_b_1()
-            .border_color(cx.theme().colors.border)
-            .bg(cx.theme().colors.surface)
-            .child(
-                div().w(rems(15.)).flex_none().px_6().child(
-                    div()
-                        .id("library-home")
-                        .cursor_pointer()
-                        .font_semibold()
-                        .text_size(cx.theme().text_size(TextSize::Md))
-                        .child("metaBook")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_dashboard(cx);
-                        })),
-                ),
-            )
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_3()
-                    .pl_12()
-                    .pr_8()
-                    .items_center()
-                    .child(div().flex_1().min_w_0().child(
-                        SearchInput::new("toolbar-search", &self.query).size(ControlSize::Sm),
-                    ))
-                    .child(
-                        Button::new("search", "Search")
-                            .primary()
-                            .size(ControlSize::Sm)
-                            .loading(self.is_processing())
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.start_search(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("choose-epub", "Upload EPUB")
-                            .variant(ButtonVariant::Outline)
-                            .size(ControlSize::Sm)
-                            .disabled(self.is_processing())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_dashboard(cx);
-                                this.choose_epub(window, cx);
-                            })),
-                    )
-                    .child(
-                        IconButton::new(
-                            "toggle-theme",
-                            if cx.theme().is_dark() {
-                                ElyIconName::Sun
-                            } else {
-                                ElyIconName::Moon
-                            },
-                        )
-                        .variant(ButtonVariant::Outline)
-                        .size(ControlSize::Sm)
-                        .tooltip("Switch between light and dark mode")
-                        .on_click(cx.listener(|this, _, window, cx| this.toggle_theme(window, cx))),
-                    ),
-            )
+        self.render_workspace_toolbar(cx)
     }
 
     pub(super) fn render_sidebar(&self, cx: &Context<Self>) -> AnyElement {

@@ -4,7 +4,7 @@ use ely_gpui_component::forms::{InputEvent, TextInput};
 use gpui::{Context, Entity, SharedString, Window};
 
 use super::styles::{DETAIL_OPTIONS, DETAIL_VALUES, TOKENIZER_OPTIONS};
-use super::{MetabookApp, Phase};
+use super::MetabookApp;
 
 impl MetabookApp {
     pub(super) fn on_input_event(
@@ -16,6 +16,9 @@ impl MetabookApp {
     ) {
         if let InputEvent::Submit = event {
             self.start_search(window, cx);
+        } else {
+            // Saved-library results follow edits even without a catalog request.
+            cx.notify();
         }
     }
 
@@ -30,18 +33,7 @@ impl MetabookApp {
     }
 
     pub(super) fn is_processing(&self) -> bool {
-        matches!(self.phase, Phase::Processing { .. })
-    }
-
-    pub(super) fn is_home(&self) -> bool {
-        matches!(
-            self.phase,
-            Phase::Idle
-                | Phase::Processing {
-                    home_view: true,
-                    ..
-                }
-        )
+        self.workspace.pending.is_some()
     }
 
     /// The API `detail` value for the current select choice.

@@ -1,5 +1,9 @@
 //! A single home canvas: identifiers, EPUB intake, and persisted recent results.
-use super::{Cover, Library, MetabookApp, Phase};
+use super::{
+    components::{schema_score, MFilePreview},
+    search_filters::recorded_activity,
+    Cover, Library, MetabookApp, Phase,
+};
 use crate::api::LibraryBook;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, IconButton},
@@ -7,11 +11,12 @@ use ely_gpui_component::{
     files::{FileOperation, FileOperationProgress, TransferState},
     forms::{DropZone, Input},
     layout::SimpleGrid,
+    lists::DirEntry,
     motion::SkeletonCard,
     primitives::{FocusRing as _, Icon, IconName, Image, Severity},
     shell::drag_region,
     theme::{ActiveTheme as _, ControlSize, IconSize, Radius, TextSize},
-    typography::{format, Ellipsis, MiddleEllipsis},
+    typography::Ellipsis,
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -21,10 +26,8 @@ use gpui::{
 };
 use gpui_component::{h_flex, v_flex};
 use jiff::Timestamp;
-use serde_json::Value;
-use std::sync::{Arc, OnceLock};
 
-const WEEK: i64 = 7 * 24 * 60 * 60;
+use std::sync::{Arc, OnceLock};
 
 fn brand_mark() -> Arc<gpui::Image> {
     static MARK: OnceLock<Arc<gpui::Image>> = OnceLock::new();
@@ -35,19 +38,6 @@ fn brand_mark() -> Arc<gpui::Image> {
         ))
     })
     .clone()
-}
-
-/// Use recorded activity only; missing, malformed and future dates stay out.
-fn recent_at(record: &Value, now: Timestamp) -> Option<Timestamp> {
-    let latest = [
-        &record["updated_at"],
-        &record["created_at"],
-        &record["scan"]["last_scanned_at"],
-    ]
-    .into_iter()
-    .filter_map(|v| v.as_str()?.parse::<Timestamp>().ok())
-    .max()?;
-    (latest <= now && now.as_second() - latest.as_second() <= WEEK).then_some(latest)
 }
 
 impl MetabookApp {
@@ -64,28 +54,34 @@ impl MetabookApp {
             .pr_3()
             .gap_2()
             .items_center()
+            .child(div().flex_1().min_w_0().child(self.render_workspace_tabs(cx)))
+            .child(drag_region("home-window-drag", window, cx).w_8().h_full())
+            .child(self.render_theme_toggle(cx))
+            .into_any_element()
+    }
+
+    pub(super) fn render_workspace_toolbar(&self, cx: &Context<Self>) -> AnyElement {
+        v_flex().w_full().px_8().py_2().gap_2()
             .child(
-                drag_region("home-window-drag", window, cx)
-                    .flex_1()
-                    .h_full(),
+                h_flex().w_full().items_center().gap_2()
+                    .child(Image::new("toolbar-brand", brand_mark()).size(rems(2.)).fit(gpui::ObjectFit::Contain))
+                    .child(div().text_size(cx.theme().text_size(TextSize::Xxl)).font_weight(FontWeight::SEMIBOLD).child("metaBook"))
+                    .child(div().flex_1())
+                    .child(div().w(rems(36.)).max_w_full().min_w_0().child(
+                        Input::new(&self.query).size(ControlSize::Lg).clearable()
+                            .suffix(Icon::new(IconName::Search).size(IconSize::Sm).color(cx.theme().colors.fg_subtle))
+                    ))
+                    .child(IconButton::new("workspace-filters", IconName::Menu)
+                        .variant(ButtonVariant::Ghost).tooltip("Search filters")
+                        .on_click(cx.listener(|this, _, _, cx| { this.filters_open = !this.filters_open; cx.notify(); })))
             )
-            .child(
-                IconButton::new(
-                    "home-theme-toggle",
-                    if cx.theme().is_dark() {
-                        IconName::Sun
-                    } else {
-                        IconName::Moon
-                    },
-                )
-                .variant(ButtonVariant::Ghost)
-                .size(ControlSize::Sm)
-                .tooltip("Switch between light and dark mode")
-                .on_click(cx.listener(|this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.toggle_theme(window, cx);
-                })),
-            )
+            .when(self.filters_open, |bar| bar.child(
+                h_flex().w_full().justify_end().gap_2()
+                    .child(self.render_search_filters("workspace-filters-row", cx))
+                    .child(Button::new("workspace-upload", "Upload EPUB").variant(ButtonVariant::Outline)
+                        .disabled(self.is_processing())
+                        .on_click(cx.listener(|this, _, window, cx| this.choose_epub(window, cx))))
+            ))
             .into_any_element()
     }
 
@@ -129,58 +125,11 @@ impl MetabookApp {
                             .pb_8()
                             .gap_6()
                             .child(
-                                h_flex()
-                                    .gap_3()
-                                    .items_center()
-                                    .child(
-                                        Image::new("home-brand-mark", brand_mark())
-                                            .size(rems(2.))
-                                            .fit(gpui::ObjectFit::Contain),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(cx.theme().text_size(TextSize::Xxl))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("metaBook"),
-                                    ),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_2()
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .items_center()
-                                            .child(
-                                                div().flex_1().min_w_0().child(
-                                                    Input::new(&self.query)
-                                                        .size(ControlSize::Lg)
-                                                        .clearable()
-                                                        .suffix(
-                                                            Icon::new(IconName::Search)
-                                                                .size(IconSize::Sm)
-                                                                .color(cx.theme().colors.fg_subtle),
-                                                        ),
-                                                ),
-                                            )
-                                            .child(
-                                                Button::new("home-search-submit", "Search")
-                                                    .primary()
-                                                    .size(ControlSize::Lg)
-                                                    .loading(self.is_processing())
-                                                    .on_click(cx.listener(
-                                                        |this, _, window, cx| {
-                                                            cx.stop_propagation();
-                                                            this.start_search(window, cx);
-                                                        },
-                                                    )),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .opacity(if self.is_processing() { 0.55 } else { 1. })
-                                            .child(drop),
-                                    ),
+                                div()
+                                    .bg(cx.theme().colors.sunken)
+                                    .rounded(cx.theme().radius(Radius::Lg))
+                                    .opacity(if self.is_processing() { 0.55 } else { 1. })
+                                    .child(drop),
                             )
                             .child(
                                 v_flex()
@@ -193,13 +142,13 @@ impl MetabookApp {
                                                 div()
                                                     .text_size(cx.theme().text_size(TextSize::Lg))
                                                     .font_weight(FontWeight::SEMIBOLD)
-                                                    .child("Recents"),
+                                                    .child("Library"),
                                             )
                                             .child(
                                                 div()
                                                     .text_size(cx.theme().text_size(TextSize::Sm))
                                                     .text_color(cx.theme().colors.fg_muted)
-                                                    .child("Past 7 days"),
+                                                    .child(self.filters.date_label()),
                                             ),
                                     )
                                     .child(self.render_recent_previews(window, cx)),
@@ -288,16 +237,18 @@ impl MetabookApp {
                 .into_any_element(),
             Library::Ready(books) => {
                 let now = Timestamp::now();
+                let query = self.query.read(cx).text();
                 let mut books: Vec<_> = books
                     .iter()
-                    .filter_map(|book| Some((book, recent_at(&book.record, now)?)))
+                    .filter(|book| self.filters.matches(&book.record, query.as_ref(), now))
+                    .map(|book| (book, recorded_activity(&book.record, now)))
                     .collect();
                 books.sort_by_key(|(_, date)| std::cmp::Reverse(*date));
                 if books.is_empty() {
                     return div()
                         .py_8()
                         .text_color(cx.theme().colors.fg_muted)
-                        .child("No books from the past week. Search or drop an EPUB to begin.")
+                        .child("No saved books match the query and filters. Change the filters, press Enter to search the catalog, or drop an EPUB.")
                         .into_any_element();
                 }
                 SimpleGrid::new(
@@ -318,66 +269,37 @@ impl MetabookApp {
     fn render_recent_preview(
         &self,
         book: &LibraryBook,
-        date: Timestamp,
+        date: Option<Timestamp>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let id = book.id.clone();
         // The preview represents the saved metadata JSON, not the source EPUB.
         let metadata = serde_json::to_vec_pretty(&book.record).unwrap_or_default();
-        let name = format!("{}.json", book.title);
-        let cover = match book
+        let entry = DirEntry::file(
+            format!("{}.json", book.title),
+            metadata.len() as u64,
+            date.unwrap_or(Timestamp::UNIX_EPOCH),
+        );
+        let preview = MFilePreview::new(
+            gpui::ElementId::Name(format!("recent-preview-{id}").into()),
+            entry,
+        )
+        .score(schema_score(&book.record))
+        .modified(date);
+        let preview = match book
             .cover_url
             .as_deref()
             .and_then(|url| self.covers.get(url))
         {
-            Some(Cover::Ready(image)) => Image::new(
-                gpui::ElementId::Name(format!("recent-cover-{id}").into()),
-                image.clone(),
-            )
-            .size_full()
-            .rounded(cx.theme().radius(Radius::Md))
-            .into_any_element(),
-            _ => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(cx.theme().colors.sunken)
-                .rounded(cx.theme().radius(Radius::Md))
-                .child(
-                    Icon::new(IconName::BookOpen)
-                        .size(IconSize::Xl)
-                        .color(cx.theme().colors.fg_muted),
-                )
-                .into_any_element(),
+            Some(Cover::Ready(image)) => preview.picture(image.clone()),
+            _ => preview,
         };
-        let preview = h_flex()
-            .gap_3()
-            .items_start()
-            .child(div().w(rems(3.6)).h(rems(5.4)).flex_none().child(cover))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .text_size(cx.theme().text_size(TextSize::Sm))
-                    .text_color(cx.theme().colors.fg_muted)
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().colors.fg)
-                            .child(MiddleEllipsis::new(name)),
-                    )
-                    .child(Ellipsis::new(super::detail::authors(&book.record["book"])))
-                    .child(Ellipsis::new(format!(
-                        "JSON · {}",
-                        format::file_size(metadata.len() as u64, false)
-                    )))
-                    .child(Ellipsis::new(format!(
-                        "Changed {}",
-                        format::relative(date, Timestamp::now())
-                    ))),
-            );
+        let preview = v_flex().min_w_0().gap_1().child(preview).child(
+            div()
+                .text_size(cx.theme().text_size(TextSize::Sm))
+                .text_color(cx.theme().colors.fg_muted)
+                .child(Ellipsis::new(super::detail::authors(&book.record["book"]))),
+        );
         let keyboard_id = id.clone();
         div()
             .id(gpui::ElementId::Name(format!("recent-card-{id}").into()))
@@ -395,6 +317,8 @@ impl MetabookApp {
             .focus_ring(cx)
             .cursor_pointer()
             .child(preview)
+            .p_2()
+            .hover(|style| style.bg(cx.theme().colors.hover.opacity(0.5)))
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -413,11 +337,16 @@ impl MetabookApp {
 
 #[cfg(test)]
 mod tests {
+    use super::super::search_filters::SearchFilters;
     use super::*;
     use serde_json::json;
     #[test]
     fn recents_include_seven_day_boundary_and_exclude_old_future_or_missing_dates() {
         let now: Timestamp = "2026-10-08T06:00:00Z".parse().unwrap();
+        let filters = SearchFilters {
+            date: vec!["7days".into()],
+            ..SearchFilters::default()
+        };
         for (date, expected) in [
             ("2026-10-01T06:00:00Z", true),
             ("2026-10-01T05:59:59Z", false),
@@ -425,11 +354,11 @@ mod tests {
             ("broken", false),
         ] {
             assert_eq!(
-                recent_at(&json!({"created_at":date}), now).is_some(),
+                filters.matches(&json!({"source":"gutendex", "created_at":date}), "", now),
                 expected
             );
         }
-        assert!(recent_at(&json!({}), now).is_none());
+        assert!(!filters.matches(&json!({}), "", now));
     }
     #[test]
     fn recents_use_latest_recorded_activity_and_parse_timezone_offsets() {
@@ -437,7 +366,7 @@ mod tests {
         let value = json!({"created_at":"2025-01-01T00:00:00Z","updated_at":"2026-10-08T01:00:00-04:00",
             "scan":{"last_scanned_at":"2026-10-07T00:00:00Z"}});
         assert_eq!(
-            recent_at(&value, now).unwrap(),
+            recorded_activity(&value, now).unwrap(),
             "2026-10-08T05:00:00Z".parse::<Timestamp>().unwrap()
         );
     }

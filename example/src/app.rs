@@ -10,13 +10,16 @@
 //! explorer for tree/graph/editor coordination. Async requests carry a
 //! request index so a stale response can never overwrite a newer one.
 
+mod catalog;
 mod components;
 mod detail;
 mod explorer;
 mod home;
 mod loading;
 mod methods;
+mod search_filters;
 mod styles;
+mod workspace;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,21 +29,21 @@ use std::time::Duration;
 use ely_gpui_component::forms::TextInput;
 use ely_gpui_component::layout::AppShell;
 use ely_gpui_component::primitives::FocusScope;
-use ely_gpui_component::shell::TitleBar;
-use ely_gpui_component::theme::{ActiveTheme as _, Mode, Radius, TextSize, Theme as ElyTheme};
+use ely_gpui_component::theme::{ActiveTheme as _, Mode, TextSize, Theme as ElyTheme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, AnyElement, AppContext as _, Context, Entity, Image, ImageFormat, InteractiveElement as _,
-    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Window,
+    div, AnyElement, AppContext as _, Context, Entity, Image, ImageFormat, IntoElement,
+    ParentElement, PathPromptOptions, Render, SharedString, Styled, Subscription, Window,
 };
-use gpui_component::button::Button;
+
 use gpui_component::select::SelectState;
 use gpui_component::spinner::Spinner;
-use gpui_component::{h_flex, v_flex, Root, Sizable as _};
+use gpui_component::{v_flex, Root, Sizable as _};
 
 use crate::api::{self, LibraryBook, SearchOutcome, SearchPage};
+
 use explorer::ResultExplorer;
+use search_filters::SearchFilters;
 use styles::{DETAIL_OPTIONS, TOKENIZER_DEFAULT_IX, TOKENIZER_OPTIONS};
 
 /// The workflow phase shown in the content region.
@@ -51,7 +54,7 @@ enum Phase {
         detail_loading: bool,
         home_view: bool,
     },
-    /// One page of Gutendex results; selection starts analysis.
+    /// Catalog metadata with a submitted-filter snapshot and provider-specific actions.
     Matches {
         page: SearchPage,
     },
@@ -98,11 +101,14 @@ pub struct MetabookApp {
     focus: gpui::FocusHandle,
     api_base: SharedString,
     query: Entity<TextInput>,
+    filters: SearchFilters,
     upload_progress: Option<Arc<api::UploadProgress>>,
     tokenizer: Entity<SelectState<Vec<&'static str>>>,
     detail: Entity<SelectState<Vec<&'static str>>>,
     epub_path: Option<PathBuf>,
     phase: Phase,
+    workspace: workspace::Workspace,
+    filters_open: bool,
     library: Library,
     covers: HashMap<SharedString, Cover>,
     /// Incremented per request; responses for an older index are discarded.
@@ -123,7 +129,8 @@ impl MetabookApp {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let query = cx.new(|cx| {
-            TextInput::new(window, cx).placeholder("Search by title, author, ISBN, or Gutenberg ID")
+            TextInput::new(window, cx)
+                .placeholder("Catalog keywords, ISBN, or Gutenberg ID · Enter to search")
         });
         // Optional token counting: a known Hugging Face tokenizer, defaulting
         // to bert-base-uncased. "No tokens" omits the parameter entirely.
@@ -152,11 +159,14 @@ impl MetabookApp {
             focus,
             api_base: api_base.into(),
             query,
+            filters: SearchFilters::default(),
             upload_progress: None,
             tokenizer,
             detail,
             epub_path: None,
             phase: Phase::Idle,
+            workspace: workspace::Workspace::default(),
+            filters_open: false,
             library: Library::Loading,
             covers: HashMap::new(),
             request_ix: 0,
@@ -168,47 +178,13 @@ impl MetabookApp {
 
     // ── Commands ───────────────────────────────────────────────────────────────
 
-    fn start_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_processing() {
-            return;
-        }
-        let query = self.query.read(cx).text().trim().to_string();
-        if query.is_empty() {
-            self.phase = Phase::Failed {
-                message: "Enter a title, an ISBN, or a Gutenberg ID to search.".into(),
-            };
-            cx.notify();
-            return;
-        }
-
-        self.search_page(query, 1, window, cx);
-    }
-
-    fn search_page(
-        &mut self,
-        query: String,
-        page: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.is_processing() {
-            return;
-        }
-        let base = self.api_base.to_string();
-        self.begin_request(
-            "Searching Gutendex…",
-            false,
-            true,
-            move || api::search(&base, &query, page),
-            window,
-            cx,
-        );
-    }
-
     fn select_match(&mut self, gutenberg_id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_processing() {
             return;
         }
+        let tab_id: SharedString = format!("gutenberg-{gutenberg_id}").into();
+        if self.reopen_workspace_tab(&tab_id, cx) { return; }
+        self.workspace.next = Some(tab_id);
         let base = self.api_base.to_string();
         let detail = self.detail_value(cx);
         let tokenizer = self.tokenizer_value(cx);
@@ -229,6 +205,14 @@ impl MetabookApp {
         if self.is_processing() {
             return;
         }
+        let gutenberg_id = match &self.library {
+            Library::Ready(books) => books.iter().find(|book| book.id == id)
+                .and_then(|book| book.record["gutenberg_id"].as_u64()),
+            _ => None,
+        };
+        let tab_id = workspace::book_tab_id(&id, gutenberg_id);
+        if self.reopen_workspace_tab(&tab_id, cx) { return; }
+        self.workspace.next = Some(tab_id);
         let base = self.api_base.to_string();
         self.begin_request(
             "Opening the saved book structure…",
@@ -275,6 +259,7 @@ impl MetabookApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_request_tab(cx);
         self.request_ix += 1;
         let ix = self.request_ix;
         self.phase = Phase::Processing {
@@ -329,8 +314,12 @@ impl MetabookApp {
         self.upload_progress = None;
         self.query
             .update(cx, |query, cx| query.set_disabled(false, cx));
+        let tab_id = self.workspace.pending.clone().expect("request tab");
+        let previous_tab = self.workspace.active.clone();
+        self.select_workspace_tab(&tab_id, cx);
         self.phase = match result {
             Ok(SearchOutcome::Analysis(analysis)) => {
+                self.workspace.title = analysis.title.clone().into();
                 let explorer = cx.new(|cx| ResultExplorer::new(analysis, ix, window, cx));
                 let subscription = cx.observe(&explorer, |_, _, cx| cx.notify());
                 Phase::Done {
@@ -338,9 +327,13 @@ impl MetabookApp {
                     _subscription: subscription,
                 }
             }
-            Ok(SearchOutcome::Matches(page)) => Phase::Matches { page },
-            Err(message) => Phase::Failed {
-                message: message.into(),
+            Ok(SearchOutcome::Matches(page)) => {
+                self.workspace.title = format!("Search results ({})", page.count).into();
+                Phase::Matches { page }
+            },
+            Err(message) => {
+                self.workspace.title = "Request failed".into();
+                Phase::Failed { message: message.into() }
             },
         };
         // A finished analysis is persisted by the API, so the library list
@@ -348,6 +341,8 @@ impl MetabookApp {
         if matches!(self.phase, Phase::Done { .. }) {
             self.refresh_library(cx);
         }
+        self.workspace.pending = None;
+        self.select_workspace_tab(&previous_tab, cx);
         cx.notify();
     }
 
@@ -384,6 +379,9 @@ impl MetabookApp {
                 self.phase = Phase::Idle;
             }
         } else {
+            self.open_request_tab(cx);
+            self.workspace.pending = None;
+            self.workspace.title = "Invalid EPUB".into();
             self.phase = Phase::Failed {
                 message: format!("“{}” isn't an .epub file.", path.display()).into(),
             };
@@ -471,11 +469,7 @@ impl MetabookApp {
     /// Sidebar navigation: leave a result, match list, or failure behind and
     /// return to the library. The form inputs and the chosen EPUB survive.
     fn show_dashboard(&mut self, cx: &mut Context<Self>) {
-        if self.is_processing() || matches!(self.phase, Phase::Idle) {
-            return;
-        }
-        self.phase = Phase::Idle;
-        cx.notify();
+        self.select_workspace_tab(&"home".into(), cx);
     }
 
     fn toggle_theme(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -489,8 +483,8 @@ impl MetabookApp {
 
     // ── Regions ────────────────────────────────────────────────────────────────
 
-    fn render_title_bar(&self, _cx: &Context<Self>) -> impl IntoElement {
-        TitleBar::new("title-bar")
+    fn render_title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_home_chrome(window, cx)
     }
 
     /// The work area. Idle shows the library (its own scroll owner, so the
@@ -546,109 +540,6 @@ impl MetabookApp {
             )
     }
 
-    fn render_matches(&self, page: SearchPage, cx: &Context<Self>) -> impl IntoElement {
-        let count = page.count;
-        let page_number = page.page;
-        let previous_query = page.query.clone();
-        let next_query = page.query.clone();
-        v_flex()
-            .size_full()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(cx.theme().text_size(TextSize::Sm))
-                    .text_color(cx.theme().colors.fg_muted)
-                    .child(if count == 0 {
-                        "No books found in Gutendex. Try a title, author, or Gutenberg ID. ISBN lookup is a keyword search.".into()
-                    } else {
-                        let plural = if count == 1 { "" } else { "s" };
-                        format!("{count} Gutendex result{plural} · Page {page_number} — select a book to analyse")
-                    }),
-            )
-            .child(
-                v_flex()
-                    .id("match-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .gap_1()
-                    .children(page.matches.into_iter().map(|book| {
-                        let id = book.gutenberg_id;
-                        let subtitle = if book.language.is_empty() {
-                            format!("#{id}")
-                        } else {
-                            format!("#{id} · {}", book.language)
-                        };
-                        h_flex()
-                            .id(("match", id))
-                            .items_center()
-                            .justify_between()
-                            .gap_3()
-                            .px_3()
-                            .py_2()
-                            .border_1()
-                            .bg(cx.theme().colors.surface)
-                            .border_color(cx.theme().colors.border)
-                            .rounded(cx.theme().radius(Radius::Lg))
-                            .hover(|style| style.bg(cx.theme().colors.hover))
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .min_w_0()
-                                    .child(div().truncate().child(book.title))
-                                    .child(
-                                        div()
-                                            .text_size(cx.theme().text_size(TextSize::Sm))
-                                            .text_color(cx.theme().colors.fg_muted)
-                                            .truncate()
-                                            .child(book.authors),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_3()
-                                    .items_center()
-                                    .flex_none()
-                                    .child(
-                                        div()
-                                            .text_size(cx.theme().text_size(TextSize::Sm))
-                                            .text_color(cx.theme().colors.fg_muted)
-                                            .child(subtitle),
-                                    )
-                                    .child(
-                                        Button::new(("analyse-match", id))
-                                            .small()
-                                            .label("Schema")
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.select_match(id, window, cx)
-                                            })),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_match(id, window, cx)
-                            }))
-                    })),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .when_some(page.previous_page, |row, previous| {
-                        row.child(Button::new("search-previous").small().label("Previous").on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                this.search_page(previous_query.clone(), previous, window, cx)
-                            }),
-                        ))
-                    })
-                    .when_some(page.next_page, |row, next| {
-                        row.child(Button::new("search-next").small().label("Next").on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                this.search_page(next_query.clone(), next, window, cx)
-                            }),
-                        ))
-                    }),
-            )
-    }
-
     fn render_failed(&self, message: SharedString, cx: &Context<Self>) -> impl IntoElement {
         use ely_gpui_component::buttons::{Button as ElyButton, ButtonVariant};
         v_flex().size_full().items_center().justify_center().child(
@@ -676,16 +567,11 @@ impl Render for MetabookApp {
             .text_color(cx.theme().colors.fg)
             .child(
                 AppShell::new()
-                    .when(self.is_home(), |shell| {
-                        shell.title_bar(self.render_home_chrome(window, cx))
-                    })
-                    .when(!self.is_home(), |shell| {
-                        shell.title_bar(
-                            v_flex()
-                                .child(self.render_title_bar(cx))
-                                .child(self.render_toolbar(cx)),
-                        )
-                    })
+                    .title_bar(
+                        v_flex()
+                            .child(self.render_title_bar(window, cx))
+                            .child(self.render_toolbar(cx)),
+                    )
                     .when(
                         matches!(
                             self.phase,

@@ -15,6 +15,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+mod catalog;
+pub use catalog::{search, BookMatch, CatalogFilters, CatalogSource, SearchPage};
+
 const TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Multipart request bytes consumed by the HTTP client; parsing has no percent.
@@ -99,25 +102,6 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
 }
 
-/// One candidate from a search that matched several books.
-#[derive(Clone)]
-pub struct BookMatch {
-    pub gutenberg_id: u64,
-    pub title: String,
-    pub authors: String,
-    pub language: String,
-}
-
-#[derive(Clone)]
-pub struct SearchPage {
-    pub query: String,
-    pub count: u64,
-    pub page: u64,
-    pub next_page: Option<u64>,
-    pub previous_page: Option<u64>,
-    pub matches: Vec<BookMatch>,
-}
-
 /// Search returns metadata; selecting a result returns its analysis.
 pub enum SearchOutcome {
     Analysis(Analysis),
@@ -151,29 +135,6 @@ pub fn search_input(input: &str) -> SearchInput {
         }
     }
     SearchInput::Title(input.to_string())
-}
-
-/// GET /api/books/search — one page of Gutendex metadata, without scanning.
-pub fn search(base: &str, query: &str, page: u64) -> Result<SearchOutcome, String> {
-    let request = ureq::get(&format!("{base}/api/books/search"))
-        .query("page", &page.to_string())
-        .timeout(TIMEOUT);
-    let request = match search_input(query) {
-        SearchInput::Gutenberg(id) => request.query("gutenberg_id", &id.to_string()),
-        SearchInput::Isbn(isbn) => request.query("isbn", &isbn),
-        SearchInput::Title(title) => request.query("q", &title),
-    };
-
-    match request.call() {
-        Ok(resp) => {
-            let text = read_body(resp)?;
-            let value = serde_json::from_str(&text)
-                .map_err(|err| format!("Invalid JSON from the API: {err}"))?;
-            parse_search_page(&value, query).map(SearchOutcome::Matches)
-        }
-        Err(ureq::Error::Status(code, resp)) => Err(status_message(code, resp)),
-        Err(err) => Err(unreachable_message(base, &err)),
-    }
 }
 
 /// GET /api/books/structure?gutenberg_id=… — analyse one selected match.
@@ -665,45 +626,6 @@ fn node_label(node: &Value, fallback_kind: &str) -> String {
     format!("{kind} {}", node["index"].as_u64().unwrap_or(0))
 }
 
-fn parse_search_page(value: &Value, query: &str) -> Result<SearchPage, String> {
-    let matches = value["results"]
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    Some(BookMatch {
-                        gutenberg_id: entry["gutenberg_id"].as_u64()?,
-                        title: entry["title"].as_str().unwrap_or("Untitled").to_string(),
-                        authors: entry["authors"]
-                            .as_array()
-                            .map(|a| {
-                                a.iter()
-                                    .filter_map(Value::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
-                            .unwrap_or_default(),
-                        language: entry["language"].as_str().unwrap_or("").to_string(),
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .ok_or_else(|| "The API returned an invalid search result list.".to_string())?;
-    Ok(SearchPage {
-        query: query.to_string(),
-        count: value["count"]
-            .as_u64()
-            .ok_or("Missing search result count.")?,
-        page: value["page"]
-            .as_u64()
-            .ok_or("Missing search result page.")?,
-        next_page: value["next_page"].as_u64(),
-        previous_page: value["previous_page"].as_u64(),
-        matches,
-    })
-}
-
 fn status_message(code: u16, resp: ureq::Response) -> String {
     let detail = read_body(resp)
         .ok()
@@ -711,13 +633,16 @@ fn status_message(code: u16, resp: ureq::Response) -> String {
         .map(|value| value["detail"].clone())
         .unwrap_or(Value::Null);
 
+    status_detail(code, &detail)
+}
+
+fn status_detail(code: u16, detail: &Value) -> String {
     let error_kind = detail["error"]
         .as_str()
         .or_else(|| detail.as_str())
-        .unwrap_or("")
-        .to_string();
+        .unwrap_or("");
 
-    match error_kind.as_str() {
+    match error_kind {
         "book_not_found" => {
             "No book matched that search. Check the spelling or try an ISBN.".into()
         }
@@ -745,7 +670,17 @@ fn status_message(code: u16, resp: ureq::Response) -> String {
         "blob_upload_failed" => {
             "The API couldn't store the file. Check its BLOB_READ_WRITE_TOKEN configuration.".into()
         }
-        _ => format!("The API returned an error (HTTP {code})."),
+        _ => {
+            let message = match code {
+                422 => detail.as_str(),
+                429 | 502 | 504 => detail["message"].as_str(),
+                _ => None,
+            };
+            message
+                .filter(|message| !message.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("The API returned an error (HTTP {code})."))
+        }
     }
 }
 
@@ -826,31 +761,61 @@ mod tests {
     }
 
     #[test]
-    fn search_page_preserves_metadata_and_navigation() {
-        let value = json!({
-            "count": 70, "page": 2, "next_page": 3, "previous_page": 1,
-            "results": [{
-                "gutenberg_id": 1342, "title": "Pride and Prejudice",
-                "authors": ["Austen, Jane", "Second Author"], "language": "en,fr"
-            }]
-        });
-        let page = parse_search_page(&value, "Austen").unwrap();
-        assert_eq!((page.count, page.page), (70, 2));
-        assert_eq!((page.next_page, page.previous_page), (Some(3), Some(1)));
-        assert_eq!(page.query, "Austen");
-        assert_eq!(page.matches[0].gutenberg_id, 1342);
-        assert_eq!(page.matches[0].authors, "Austen, Jane, Second Author");
-        assert_eq!(page.matches[0].language, "en,fr");
+    fn catalog_validation_errors_expose_backend_detail() {
+        let detail = json!("Gutendex has no publication dates; date filters are unsupported.");
+        assert_eq!(
+            status_detail(422, &detail),
+            "Gutendex has no publication dates; date filters are unsupported."
+        );
     }
 
     #[test]
-    fn search_page_accepts_empty_results_and_rejects_missing_list() {
-        let empty = json!({"count": 0, "page": 1, "results": []});
-        let page = parse_search_page(&empty, "unknown").unwrap();
-        assert!(page.matches.is_empty());
-        assert_eq!(page.next_page, None);
-        assert_eq!(page.previous_page, None);
-        assert!(parse_search_page(&json!({"count": 0, "page": 1}), "unknown").is_err());
+    fn catalog_provider_errors_expose_backend_message() {
+        for (code, message) in [
+            (
+                429,
+                "openalex rate limit exceeded. Retry later with backoff.",
+            ),
+            (502, "gutendex returned invalid catalog metadata."),
+            (504, "openalex request timed out; retry later."),
+        ] {
+            let detail = json!({"error": "openalex_unavailable", "message": message});
+            assert_eq!(status_detail(code, &detail), message);
+        }
+    }
+
+    #[test]
+    fn status_details_preserve_custom_messages() {
+        assert_eq!(
+            status_detail(
+                422,
+                &json!({"error": "invalid_epub", "message": "Missing spine."})
+            ),
+            "Invalid EPUB: Missing spine."
+        );
+        assert_eq!(
+            status_detail(404, &json!("book_not_found")),
+            "No book matched that search. Check the spelling or try an ISBN."
+        );
+        assert_eq!(
+            status_detail(
+                502,
+                &json!({"error": "blob_upload_failed", "message": "Detail"})
+            ),
+            "The API couldn't store the file. Check its BLOB_READ_WRITE_TOKEN configuration."
+        );
+    }
+
+    #[test]
+    fn status_details_fall_back_for_missing_or_malformed_messages() {
+        for code in [422, 429, 502, 504] {
+            for detail in [Value::Null, json!({}), json!({"message": 7}), json!(" ")] {
+                assert_eq!(
+                    status_detail(code, &detail),
+                    format!("The API returned an error (HTTP {code}).")
+                );
+            }
+        }
     }
 
     #[test]

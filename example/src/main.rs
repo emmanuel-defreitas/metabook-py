@@ -11,8 +11,8 @@ use std::borrow::Cow;
 
 use ely_gpui_component::theme::ActiveTheme as _;
 use gpui::{
-    px, size, App, AppContext as _, AssetSource, Result, SharedString, TitlebarOptions,
-    WindowAppearance, WindowKind, WindowOptions,
+    px, size, App, AppContext as _, AssetSource, Result, SharedString, TitlebarOptions, WindowKind,
+    WindowOptions,
 };
 use gpui_component::Root;
 
@@ -20,6 +20,7 @@ use crate::app::MetabookApp;
 
 const CUSTOM_ICON: &str = "icons/document-magnifying-glass.svg";
 const BRAND_MARK: &str = "icons/metabook-mark.svg";
+const BOOK_ICON: &str = "icons/book.svg";
 
 /// This app's own icons, then Ely's, then gpui-component's. GPUI takes one
 /// asset source, and Ely's `init` panics unless `icons/check.svg` loads
@@ -28,6 +29,11 @@ struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == BOOK_ICON {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/book.svg"
+            ))));
+        }
         if path == BRAND_MARK {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/metabook-mark.svg"
@@ -52,6 +58,9 @@ impl AssetSource for Assets {
         }
         if BRAND_MARK.starts_with(path) {
             assets.push(BRAND_MARK.into());
+        }
+        if BOOK_ICON.starts_with(path) {
+            assets.push(BOOK_ICON.into());
         }
         Ok(assets)
     }
@@ -99,4 +108,20 @@ fn main() {
             })
             .detach();
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assets_load_the_book_placeholder_icon() {
+        let icon = Assets.load(BOOK_ICON).unwrap().unwrap();
+        assert_eq!(icon.as_ref(), include_bytes!("../assets/icons/book.svg"));
+    }
+
+    #[test]
+    fn assets_list_the_book_placeholder_icon() {
+        assert!(Assets.list("icons/").unwrap().contains(&BOOK_ICON.into()));
+    }
 }
