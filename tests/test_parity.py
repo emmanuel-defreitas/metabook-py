@@ -82,6 +82,15 @@ EDGE_CASES = [
         "text/markdown",
         b"> quote\nlazy line\n> # quoted heading\n\n[ref]: http://x\n\n[t][ref] <http://a.b> www",
     ),
+    # PR #91 review: quote ends at an unquoted block, indented code beats list
+    # markers, heading links are counted.
+    ("text/markdown", b"> Quoted text.\n# Next section\n\nBody text."),
+    (
+        "text/markdown",
+        b"> > nested\nlazy\n\n> - item\nlazy\n\n> ```\n> code\nafter\n\n> T\n> ===\nx",
+    ),
+    ("text/markdown", b"    - not a list\n    - still code\n\n- a\n\n    - nested\n\n\t* tab"),
+    ("text/markdown", b"# [T](https://e.x) https://f.g\n\n[S](u) <http://a.b>\n---\n\ntext"),
     (
         "text/markdown",
         b"Setext\n===\n\nSub\n---\n\n    indented code\n\n|a|b|\n|-|-|\n|[x](y)|z|\n\n[^n]: note\n    more",

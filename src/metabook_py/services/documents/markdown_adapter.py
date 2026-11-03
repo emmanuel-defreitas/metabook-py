@@ -56,6 +56,10 @@ def _prose(kind: BlockType, raw: str) -> Block:
     return Block(kind, text=strip_inline(raw)).add_links(count_links(raw))
 
 
+def _heading(level: int, raw: str) -> Block:
+    return heading(level, strip_inline(raw)).add_links(count_links(raw))
+
+
 def _starts_block(line: str) -> bool:
     return bool(
         _FENCE.match(line)
@@ -64,6 +68,47 @@ def _starts_block(line: str) -> bool:
         or _HR.match(line)
         or _LIST.match(line)
     )
+
+
+def _unquote(line: str) -> str:
+    """Strip every leading blockquote marker."""
+    while _QUOTE.match(line):
+        line = _QUOTE.sub("", line, count=1)
+    return line
+
+
+def _is_paragraph_text(line: str) -> bool:
+    """Whether a quoted line (outer marker already stripped) can be lazily continued."""
+    line = _unquote(line)
+    return bool(
+        line.strip()
+        and not (_ATX.match(line) or _FENCE.match(line) or _HR.match(line) or _SETEXT.match(line))
+    )
+
+
+def _quote_lines(lines: list[str], start: int) -> tuple[list[str], int]:
+    """The blockquote at *start*, markers stripped, and the index just past it.
+
+    An unquoted line stays in the quote only as lazy paragraph continuation:
+    the previous line must be open paragraph text (not a heading, rule or code)
+    and the line itself must not start a new block.
+    """
+    inner: list[str] = []
+    in_fence = False
+    i, n = start, len(lines)
+    while i < n and lines[i].strip():
+        line = lines[i]
+        if _QUOTE.match(line):
+            content = _QUOTE.sub("", line, count=1)
+            if _FENCE.match(_unquote(content)):
+                in_fence = not in_fence
+            inner.append(content)
+        elif not in_fence and _is_paragraph_text(inner[-1]) and not _starts_block(line):
+            inner.append(line)
+        else:
+            break
+        i += 1
+    return inner, i
 
 
 def _strip_front_matter(lines: list[str]) -> list[str]:
@@ -154,13 +199,13 @@ def parse_lines(lines: list[str]) -> list[Block]:
 
         if atx := _ATX.match(line):
             flush()
-            blocks.append(heading(len(atx.group(1)), strip_inline(atx.group(2) or "")))
+            blocks.append(_heading(len(atx.group(1)), atx.group(2) or ""))
             i += 1
             continue
 
         if para and (setext := _SETEXT.match(line)):
             level = 1 if setext.group(1).startswith("=") else 2
-            blocks.append(heading(level, strip_inline(" ".join(para))))
+            blocks.append(_heading(level, " ".join(para)))
             para.clear()
             i += 1
             continue
@@ -172,10 +217,7 @@ def parse_lines(lines: list[str]) -> list[Block]:
 
         if _QUOTE.match(line):
             flush()
-            inner: list[str] = []
-            while i < n and lines[i].strip() and (_QUOTE.match(lines[i]) or inner):
-                inner.append(_QUOTE.sub("", lines[i], count=1))
-                i += 1
+            inner, i = _quote_lines(lines, i)
             blocks.append(Block(BlockType.BLOCKQUOTE, children=parse_lines(inner)))
             continue
 
@@ -202,17 +244,19 @@ def parse_lines(lines: list[str]) -> list[Block]:
             blocks.append(Block(BlockType.TABLE).add_links(links))
             continue
 
+        # Indented code wins over list markers at the start of a block; after
+        # paragraph text, an indented marker still opens a (nested) list.
+        if not para and _INDENTED.match(line):
+            while i < n and (_INDENTED.match(lines[i]) or not lines[i].strip()):
+                i += 1
+            blocks.append(Block(BlockType.CODE_BLOCK))
+            continue
+
         if _LIST.match(line) and _LIST.match(line).group(3):  # type: ignore[union-attr]
             flush()
             end = _list_item_lines(lines, i)
             blocks.append(_parse_list(lines[i:end]))
             i = end
-            continue
-
-        if not para and _INDENTED.match(line):
-            while i < n and (_INDENTED.match(lines[i]) or not lines[i].strip()):
-                i += 1
-            blocks.append(Block(BlockType.CODE_BLOCK))
             continue
 
         if not para and _IMAGE_LINE.match(line):

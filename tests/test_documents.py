@@ -26,6 +26,7 @@ from metabook_py.services.counter import _count_words, _para_node
 from metabook_py.services.documents import fetch as doc_fetch
 from metabook_py.services.documents.blocks import Block, BlockType, heading
 from metabook_py.services.documents.builder import build_document_structure
+from metabook_py.services.documents.markdown_adapter import parse_markdown
 from metabook_py.services.documents.service import analyze_document, resolve_format
 from metabook_py.services.native import active_parser
 
@@ -333,6 +334,78 @@ def test_unclosed_markdown_fence_runs_to_end():
     assert (totals.headings, totals.code_blocks) == (1, 1)
 
 
+def test_markdown_blockquote_ends_at_unquoted_heading():
+    md = b"> Quoted text.\n# Next section\n\nBody text."
+    preamble, section = analyze_document(md, content_type="text/markdown").structure.sections
+    assert (preamble.kind, preamble.counts.blockquotes, preamble.counts.paragraphs) == (
+        "preamble",
+        1,
+        1,
+    )
+    assert (section.kind, section.counts.headings, section.counts.paragraphs) == ("section", 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("md", "expected"),
+    [
+        # Lazy continuation: plain text after quoted paragraph text stays inside.
+        ("> Quoted\nlazy line", [("blockquote", ["paragraph"])]),
+        ("> > nested\nlazy", [("blockquote", ["blockquote"])]),
+        ("> - item\nlazy", [("blockquote", ["list"])]),
+        # Anything that starts a block, or follows non-paragraph content, ends the quote.
+        ("> Quoted text.\n# Next", [("blockquote", ["paragraph"]), ("heading", [])]),
+        ("> Quoted\n- item", [("blockquote", ["paragraph"]), ("list", ["list_item"])]),
+        ("> Quoted\n```\ncode\n```", [("blockquote", ["paragraph"]), ("code_block", [])]),
+        ("> Quoted\n---", [("blockquote", ["paragraph"])]),
+        ("> # Quote title\nNot lazy.", [("blockquote", ["heading"]), ("paragraph", [])]),
+        ("> ```\n> code\nafter", [("blockquote", ["code_block"]), ("paragraph", [])]),
+        ("> Title\n> ===\nafter", [("blockquote", ["heading"]), ("paragraph", [])]),
+    ],
+)
+def test_markdown_blockquote_lazy_continuation(md, expected):
+    blocks = parse_markdown(md)
+    assert [(str(b.type), [str(c.type) for c in b.children]) for b in blocks] == expected
+
+
+@pytest.mark.parametrize(
+    "md",
+    [
+        b"    - not a list\n    - still code",
+        b"Intro.\n\n    1. not a list\n    2. still code",
+        b"\t* tab-indented code",
+    ],
+)
+def test_markdown_indented_code_beats_list_markers(md):
+    totals = analyze_document(md, content_type="text/markdown").structure.totals
+    assert (totals.code_blocks, totals.lists, totals.list_items) == (1, 0, 0)
+    assert totals.words == (1 if md.startswith(b"Intro") else 0)
+
+
+@pytest.mark.parametrize(
+    "md",
+    [b"- a\n  - nested", b"- a\n    - nested", b"- a\n\n    - nested", b"1. a\n\n    - nested"],
+)
+def test_markdown_nested_lists_still_nest(md):
+    totals = analyze_document(md, content_type="text/markdown").structure.totals
+    assert (totals.lists, totals.list_items, totals.code_blocks) == (2, 2, 0)
+
+
+@pytest.mark.parametrize(
+    ("md", "links"),
+    [
+        (b"# [Title](https://example.org)\n\nText.", 1),
+        (b"## See <https://a.b> and https://c.d\n\nText.", 2),
+        (b"[Title](https://example.org) [x][ref]\n===\n\nText.", 2),
+        (b"Plain setext\n---\n\nText.", 0),
+    ],
+)
+def test_markdown_heading_links_are_counted(md, links):
+    result = analyze_document(md, content_type="text/markdown")
+    [section] = result.structure.sections
+    assert (section.counts.headings, section.counts.links) == (1, links)
+    assert result.structure.totals.links == links
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -481,6 +554,33 @@ async def test_analyze_url_octet_stream_uses_extension(client, public_dns):
     resp = await client.post("/api/documents/analyze-url", json={"url": DOC_URL})
     assert resp.status_code == 200
     assert resp.json()["document"]["format"] == "markdown"
+
+
+@pytest.mark.parametrize(
+    ("start", "final", "fmt"),
+    [
+        # Extensionless URL → .md: would be a 415 if only the original URL were checked.
+        ("https://docs.example.com/latest", "https://docs.example.com/v2/paper.md", "markdown"),
+        # .txt → .md: would pick the wrong adapter if only the original URL were checked.
+        ("https://docs.example.com/paper.txt", "https://docs.example.com/v2/paper.md", "markdown"),
+    ],
+)
+@respx.mock
+async def test_analyze_url_octet_stream_uses_final_url_extension(
+    client, public_dns, start, final, fmt
+):
+    respx.get(start).mock(return_value=httpx.Response(302, headers={"location": final}))
+    respx.get(final).mock(
+        return_value=httpx.Response(
+            200, content=b"# Hi\n\nText.", headers={"content-type": "application/octet-stream"}
+        )
+    )
+    resp = await client.post("/api/documents/analyze-url", json={"url": start})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["document"]["format"] == fmt
+    assert body["document"]["source_url"] == start  # the URL the caller asked for
+    assert body["structure"]["totals"]["headings"] == 1
 
 
 @pytest.mark.parametrize(

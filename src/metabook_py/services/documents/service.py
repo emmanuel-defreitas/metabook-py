@@ -121,15 +121,20 @@ def analyze_document(
     content_type: str | None,
     filename: str | None = None,
     source_url: str | None = None,
+    final_url: str | None = None,
 ) -> DocumentAnalysisResponse:
     """
     Analyse one document and return its semantic structure — counts only.
+
+    *source_url* is reported back as given; *final_url* (where the bytes were
+    served from after redirects) is what a generic content type's file
+    extension is read from, falling back to *source_url*.
 
     Raises DocumentTooLargeError, UnsupportedDocumentTypeError, InvalidDocumentError.
     """
     if len(data) > settings.document_max_bytes:
         raise DocumentTooLargeError(settings.document_max_bytes)
-    fmt, ctype = resolve_format(content_type, filename or source_url)
+    fmt, ctype = resolve_format(content_type, filename or final_url or source_url)
 
     t0 = time.monotonic()
     structure, page_count = build_structure(fmt, data)
@@ -162,5 +167,5 @@ async def analyze_document_url(url: str) -> DocumentAnalysisResponse:
     """
     from metabook_py.services.documents.fetch import fetch_document
 
-    data, content_type, _final_url = await fetch_document(url)
-    return analyze_document(data, content_type=content_type, source_url=url)
+    data, content_type, final_url = await fetch_document(url)
+    return analyze_document(data, content_type=content_type, source_url=url, final_url=final_url)
