@@ -15,7 +15,7 @@
 
   **📚 X-ray any book's structure — chapters, paragraphs, sentences, clauses, words — as clean JSON. REST + MCP, Project Gutenberg search or your own EPUB. No book text ever leaves the API.**
 
-  [API docs](#-rest-api) · [MCP server](#-mcp-server) · [Desktop example](#-desktop-example-gpui) · [Workflow](.github/WORKFLOW.md)
+  [API docs](#-rest-api) · [Web app](#-web-app) · [MCP server](#-mcp-server) · [Desktop example](#-desktop-example-gpui) · [Workflow](.github/WORKFLOW.md)
 
   <img src="assets/demo.gif" alt="Metabook desktop example searching Pride and Prejudice and exploring its structural schema" width="860"/>
 </div>
@@ -211,13 +211,22 @@ returns (zero counts omitted here for brevity; the API returns every field):
 | `GET` | `/api/books/uploads` | List persisted upload documents (needs `MONGODB_URI`) |
 | `POST` | `/api/documents/analyze` | Analyse one uploaded document (multipart `file`) |
 | `POST` | `/api/documents/analyze-url` | Fetch a public URL (`{"url": …}`) and analyse it |
-| `GET` | `/health` | Liveness + cache stats |
+| `GET` | `/api/health` | Liveness + cache stats (`/health` remains an alias) |
 
 Interactive OpenAPI docs live at `/api/docs`.
 
+## 🌐 Web app
+
+[`web/`](web) is a Next.js port of the desktop client (search, filters, EPUB upload,
+saved library and the structure explorer). On Vercel, [`vercel.json`](vercel.json)
+defines two services in one project: the web app answers every path, and `/api/*`
+(plus `/mcp` and `/health`) goes to this FastAPI app. Set the project's
+framework preset to **Services** in the Vercel dashboard. Locally, run `make dev`
+and then `npm run dev` in `web/`; see [web/README.md](web/README.md).
+
 ## 🤖 MCP server
 
-A [FastMCP](https://gofastmcp.com) server is mounted at `/mcp`, so agents can use the same service layer through four tools:
+A [FastMCP](https://gofastmcp.com) server is mounted at `/api/mcp` (with `/mcp` kept as an alias), so agents can use the same service layer through four tools:
 
 | Tool | Description |
 |------|-------------|
