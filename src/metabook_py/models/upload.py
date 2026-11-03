@@ -26,6 +26,10 @@ class StoredBookInfo(BaseModel):
     language: str = "en"
     subjects: list[str] = Field(default_factory=list)
     isbn: str | None = None
+    publisher: str | None = None
+    license: str | None = None
+    date: str | None = None
+    number_of_pages: int | None = None
 
 
 class ScanInfo(BaseModel):
@@ -40,6 +44,7 @@ class ScanInfo(BaseModel):
     # with a serialization alias — the wire/storage name stays "schema".
     schema_type: str | None = Field(None, alias="schema")
     schema_confidence: str | None = None
+    schema_score: float | None = None
     total_tokens: int | None = None
     tokenizer: str | None = None
     summary: StructureSummary | None = None

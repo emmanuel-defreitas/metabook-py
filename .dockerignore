@@ -1,0 +1,11 @@
+.git
+.venv
+.cache
+**/__pycache__
+**/target
+example
+assets
+tests
+.claude
+.env
+.env.*

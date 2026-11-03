@@ -95,6 +95,16 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      # Local Cargo patches unify Ely and the retained widgets on one GPUI.
+      - name: Check out pinned GPUI
+        if: ${{ steps.changed.outputs.example == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-industries/zed
+          ref: 1a28cff4b409169bac058bca40dfbfeb7621d19b
+          path: example/.gpui
+          persist-credentials: false
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: ${{ steps.changed.outputs.example == 'true' }}
         with:
