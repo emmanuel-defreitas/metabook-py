@@ -170,13 +170,19 @@ def _findall(pattern: re.Pattern, text: str) -> list[str]:
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
-def detect_schema(text: str, *, schema_override: SchemaType | None = None) -> DetectedSchema:
+def detect_schema(
+    text: str,
+    *,
+    schema_override: SchemaType | None = None,
+    preprocessed: bool = False,
+) -> DetectedSchema:
     """Select a schema with an explainable heuristic score, not a probability.
 
     Candidate scores represent rule support, not mutually exclusive likelihoods.
     An override changes the builder selection, never the automatic evidence.
     """
-    text = preprocess_text(text)
+    if not preprocessed:
+        text = preprocess_text(text)
     verses = len(_findall(VERSE_RE, text))
     parts = len(_findall(PART_RE, text))
     chapters_word = len(_findall(CHAPTER_WORD_RE, text))

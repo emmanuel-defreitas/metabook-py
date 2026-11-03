@@ -1,3 +1,6 @@
+from typing import Literal
+
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +14,8 @@ class Settings(BaseSettings):
     )
 
     gutendex_base_url: str = "https://gutendex.com"
+    openalex_base_url: str = "https://api.openalex.org"
+    openalex_api_key: SecretStr | None = None
     cache_ttl: int = 86400  # 24 hours in seconds
     rate_limit_per_second: float = 1.0
     max_disambiguations: int = 10
@@ -19,11 +24,21 @@ class Settings(BaseSettings):
     blob_folder: str = "books"
     blob_access: str = "private"  # must match the connected store's access mode
     max_upload_bytes: int = 50 * 1024 * 1024  # 50 MB
+    # Single-document analysis (/api/documents/*, MCP analyze_document)
+    document_max_bytes: int = 20 * 1024 * 1024  # 20 MB
+    document_fetch_timeout: float = 10.0  # seconds, whole URL fetch
+    document_max_redirects: int = 5
+    # Parsing core (METABOOK_PARSER). "rust" needs the metabook-core extension
+    # (uv sync --extra rust); without it the Python implementation is used.
+    metabook_parser: Literal["python", "rust"] = "python"
     # MongoDB persistence for the "uploads" collection (one document per book
     # a user uploaded or selected from search results). Empty URI = disabled;
     # every endpoint then behaves exactly as before.
     mongodb_uri: str = ""  # e.g. mongodb://localhost:27017 (MONGODB_URI)
     mongodb_db: str = "metabook"
+    # PostgreSQL takes precedence over MongoDB. Keep credentials in .env.local.
+    database_url: str = ""
+    default_user_id: str | None = None
     app_name: str = "Book Structure API"
     debug: bool = False
 

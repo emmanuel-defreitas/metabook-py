@@ -170,6 +170,7 @@ class MetaInfo(_OmitAbsentTokenFields):
 
 
 class BookStructureResponse(BaseModel):
+    record_id: str | None = None
     book: BookInfo
     structure: StructureDetail
     meta: MetaInfo
@@ -186,6 +187,7 @@ class UploadMetaInfo(_OmitAbsentTokenFields):
 
 
 class BookUploadResponse(BaseModel):
+    record_id: str | None = None
     book: UploadedBookInfo
     blob: BlobInfo
     structure: StructureDetail
