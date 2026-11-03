@@ -15,7 +15,7 @@ from metabook_py.core.config import settings
 from metabook_py.main import app
 from metabook_py.mcp_server import search_book_structure
 
-GUTENDEX_URL = f"{settings.gutendex_base_url}/books/"
+GUTENDEX_URL = f"{settings.gutendex_base_url}/books/1342/"
 
 
 @pytest.fixture

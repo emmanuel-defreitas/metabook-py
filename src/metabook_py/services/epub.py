@@ -48,6 +48,10 @@ class EpubMetadata:
     language: str = "en"
     subjects: list[str] = field(default_factory=list)
     isbn: str | None = None
+    publisher: str | None = None
+    license: str | None = None
+    date: str | None = None
+    number_of_pages: int | None = None
 
 
 @dataclass
@@ -146,6 +150,18 @@ def _parse_metadata(opf: ElementTree.Element) -> EpubMetadata:
     meta.subjects = [
         el.text.strip() for el in opf.findall(".//dc:subject", _NS) if el.text and el.text.strip()
     ]
+
+    for field_name, tag in (("publisher", "publisher"), ("license", "rights"), ("date", "date")):
+        value = opf.find(f".//dc:{tag}", _NS)
+        if value is not None and value.text and value.text.strip():
+            setattr(meta, field_name, value.text.strip())
+
+    # An EPUB has no reliable physical page count unless its metadata declares one.
+    for value in opf.findall(".//opf:meta", _NS):
+        declared_pages = (value.text or "").strip()
+        if value.get("property") == "schema:numberOfPages" and declared_pages.isdigit():
+            meta.number_of_pages = int(declared_pages)
+            break
 
     lang = opf.find(".//dc:language", _NS)
     if lang is not None and lang.text and lang.text.strip():

@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,8 @@ class Settings(BaseSettings):
     )
 
     gutendex_base_url: str = "https://gutendex.com"
+    openalex_base_url: str = "https://api.openalex.org"
+    openalex_api_key: SecretStr | None = None
     cache_ttl: int = 86400  # 24 hours in seconds
     rate_limit_per_second: float = 1.0
     max_disambiguations: int = 10
@@ -33,6 +36,9 @@ class Settings(BaseSettings):
     # every endpoint then behaves exactly as before.
     mongodb_uri: str = ""  # e.g. mongodb://localhost:27017 (MONGODB_URI)
     mongodb_db: str = "metabook"
+    # PostgreSQL takes precedence over MongoDB. Keep credentials in .env.local.
+    database_url: str = ""
+    default_user_id: str | None = None
     app_name: str = "Book Structure API"
     debug: bool = False
 

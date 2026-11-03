@@ -1,2 +1,5 @@
 /target
-/Metabook.app/Contents/MacOS/
+Metabook.app/
+!/Metabook.app/Contents/MacOS/Metabook
+.gpui/
+.claude/
