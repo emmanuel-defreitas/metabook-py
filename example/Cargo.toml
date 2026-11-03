@@ -8,7 +8,7 @@ description = "GPUI desktop example client for the Book Structure API"
 [dependencies]
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "a3f7bb2673ea82fed19921f87edcf1eef1f37bee", features = ["tree-sitter"] }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "a3f7bb2673ea82fed19921f87edcf1eef1f37bee" }
-ely-gpui-component = { git = "https://github.com/ZacharyZhang-NY/Ely-GPUI-Components" }
+ely-gpui-component = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components" }
 # Same GPUI revision Ely pins. Another revision is a different crate, so the
 # title bar's types would not match this window.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1a28cff4b409169bac058bca40dfbfeb7621d19b" }
