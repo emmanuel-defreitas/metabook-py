@@ -5,9 +5,10 @@
 	<key>CFBundleName</key><string>Metabook</string>
 	<key>CFBundleDisplayName</key><string>Metabook</string>
 	<key>CFBundleIdentifier</key><string>dev.metabook.example</string>
-	<key>CFBundleExecutable</key><string>metabook-example</string>
+	<key>CFBundleExecutable</key><string>Metabook</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleIconFile</key><string>AppIcon</string>
+	<key>CFBundleIconFile</key><string>metabook</string>
+	<key>CFBundleIconName</key><string>metabook</string>
 	<key>CFBundleVersion</key><string>0.1.0</string>
 	<key>NSHighResolutionCapable</key><true/>
 </dict>

@@ -1,21 +1,24 @@
 //! Form state and value methods for `MetabookApp`.
 
+use ely_gpui_component::forms::{InputEvent, TextInput};
 use gpui::{Context, Entity, SharedString, Window};
-use gpui_component::input::{InputEvent, InputState};
 
 use super::styles::{DETAIL_OPTIONS, DETAIL_VALUES, TOKENIZER_OPTIONS};
-use super::{MetabookApp, Phase};
+use super::MetabookApp;
 
 impl MetabookApp {
     pub(super) fn on_input_event(
         &mut self,
-        _: &Entity<InputState>,
+        _: &Entity<TextInput>,
         event: &InputEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let InputEvent::PressEnter { .. } = event {
+        if let InputEvent::Submit = event {
             self.start_search(window, cx);
+        } else {
+            // Saved-library results follow edits even without a catalog request.
+            cx.notify();
         }
     }
 
@@ -30,7 +33,7 @@ impl MetabookApp {
     }
 
     pub(super) fn is_processing(&self) -> bool {
-        matches!(self.phase, Phase::Processing { .. })
+        self.workspace.pending.is_some()
     }
 
     /// The API `detail` value for the current select choice.

@@ -68,10 +68,11 @@ _NO_TEXT_FORMAT = {
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def gutendex_url() -> str:
+def gutendex_url(gutenberg_id: int | None = None) -> str:
     from metabook_py.core.config import settings
 
-    return f"{settings.gutendex_base_url}/books/"
+    suffix = f"{gutenberg_id}/" if gutenberg_id is not None else ""
+    return f"{settings.gutendex_base_url}/books/{suffix}"
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
@@ -81,7 +82,9 @@ class TestGutendexClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_single_result_by_id(self):
-        respx.get(gutendex_url()).mock(return_value=httpx.Response(200, json=_SINGLE_HIT))
+        respx.get(gutendex_url(1342)).mock(
+            return_value=httpx.Response(200, json=_SINGLE_HIT["results"][0])
+        )
 
         client = GutendexClient()
         book, url, is_html = await client.search(gutenberg_id=1342)
@@ -96,7 +99,9 @@ class TestGutendexClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_prefers_plain_text_over_html(self):
-        respx.get(gutendex_url()).mock(return_value=httpx.Response(200, json=_SINGLE_HIT))
+        respx.get(gutendex_url(1342)).mock(
+            return_value=httpx.Response(200, json=_SINGLE_HIT["results"][0])
+        )
 
         client = GutendexClient()
         _, url, is_html = await client.search(gutenberg_id=1342)
@@ -126,19 +131,23 @@ class TestGutendexClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_single_result_on_direct_id_no_disambiguation(self):
-        """Even if the API returns multiple results, a direct ID lookup
-        takes the first result without raising AmbiguousBookError."""
-        respx.get(gutendex_url()).mock(return_value=httpx.Response(200, json=_MULTIPLE_HITS))
+        """A direct ID uses the individual endpoint without disambiguation."""
+        route = respx.get(gutendex_url(1)).mock(
+            return_value=httpx.Response(200, json=_MULTIPLE_HITS["results"][0])
+        )
 
         client = GutendexClient()
         # gutenberg_id is provided → skip disambiguation logic
         book, _, _ = await client.search(gutenberg_id=1)
         assert book.gutenberg_id == 1
+        assert route.called
 
     @respx.mock
     @pytest.mark.asyncio
     async def test_no_text_format_raises_unsupported(self):
-        respx.get(gutendex_url()).mock(return_value=httpx.Response(200, json=_NO_TEXT_FORMAT))
+        respx.get(gutendex_url(99)).mock(
+            return_value=httpx.Response(200, json=_NO_TEXT_FORMAT["results"][0])
+        )
 
         client = GutendexClient()
         with pytest.raises(UnsupportedFormatError):
@@ -160,10 +169,12 @@ class TestGutendexClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_language_param_forwarded(self):
-        route = respx.get(gutendex_url()).mock(return_value=httpx.Response(200, json=_SINGLE_HIT))
+        route = respx.get(gutendex_url()).mock(
+            return_value=httpx.Response(200, json=_SINGLE_HIT)
+        )
 
         client = GutendexClient()
-        await client.search(gutenberg_id=1342, language="fr")
+        await client.search(title="Pride", language="fr")
 
         request = route.calls.last.request
         assert b"fr" in request.url.query
@@ -171,7 +182,7 @@ class TestGutendexClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_timeout_raises_unavailable(self):
-        respx.get(gutendex_url()).mock(side_effect=httpx.ReadTimeout("read timed out"))
+        respx.get(gutendex_url(1342)).mock(side_effect=httpx.ReadTimeout("read timed out"))
 
         client = GutendexClient()
         with pytest.raises(GutendexUnavailableError) as exc:
@@ -181,7 +192,7 @@ class TestGutendexClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_connect_error_raises_unavailable(self):
-        respx.get(gutendex_url()).mock(side_effect=httpx.ConnectError("connection refused"))
+        respx.get(gutendex_url(1342)).mock(side_effect=httpx.ConnectError("connection refused"))
 
         client = GutendexClient()
         with pytest.raises(GutendexUnavailableError) as exc:
@@ -191,7 +202,7 @@ class TestGutendexClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_server_error_raises_unavailable(self):
-        respx.get(gutendex_url()).mock(return_value=httpx.Response(500, text="oops"))
+        respx.get(gutendex_url(1342)).mock(return_value=httpx.Response(500, text="oops"))
 
         client = GutendexClient()
         with pytest.raises(GutendexUnavailableError) as exc:
