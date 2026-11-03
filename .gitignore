@@ -24,3 +24,6 @@ dist/
 .vscode/
 .vercel
 .env*
+
+# Rust
+rust/**/target/

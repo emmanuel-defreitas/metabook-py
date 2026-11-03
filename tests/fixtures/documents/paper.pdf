@@ -1,0 +1,60 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+2 0 obj
+<< /Length 741 >>
+stream
+BT /F1 11 Tf 72 740 Td (Preamble paragraph before any heading. It continues) Tj ET
+BT /F1 11 Tf 72 726 Td (on this line.) Tj ET
+BT /F1 20 Tf 72 690 Td (Document Structure) Tj ET
+BT /F1 11 Tf 72 664 Td (Opening paragraph of the paper. It has two sentences.) Tj ET
+BT /F1 16 Tf 72 630 Td (Introduction) Tj ET
+BT /F1 11 Tf 72 606 Td (Dr. Smith wrote the first draft. The second sen-) Tj ET
+BT /F1 11 Tf 72 592 Td (tence follows! Does a third one end here?) Tj ET
+BT /F1 11 Tf 72 564 Td (- First point) Tj ET
+BT /F1 11 Tf 72 550 Td (- Second point) Tj ET
+BT /F1 11 Tf 72 536 Td (- Third point) Tj ET
+BT /F1 13 Tf 72 504 Td (Background) Tj ET
+BT /F1 11 Tf 72 480 Td (Figure 1. A caption for the first figure.) Tj ET
+BT /F1 9 Tf 72 60 Td (1) Tj ET
+endstream
+endobj
+3 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+4 0 obj
+<< /Length 333 >>
+stream
+BT /F1 16 Tf 72 740 Td (Methods) Tj ET
+BT /F1 11 Tf 72 716 Td (A paragraph on the second page. It has two sentences.) Tj ET
+BT /F1 16 Tf 72 680 Td (References) Tj ET
+BT /F1 11 Tf 72 656 Td ([1] Smith, J. Structure of things. 2020.) Tj ET
+BT /F1 11 Tf 72 628 Td ([2] Doe, A. Counting words. 2021.) Tj ET
+BT /F1 9 Tf 72 60 Td (2) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+7 0 obj
+<< /Type /Catalog /Pages 6 0 R >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000106 00000 n 
+0000000898 00000 n 
+0000001024 00000 n 
+0000001408 00000 n 
+0000001534 00000 n 
+0000001597 00000 n 
+trailer
+<< /Size 8 /Root 7 0 R >>
+startxref
+1646
+%%EOF
