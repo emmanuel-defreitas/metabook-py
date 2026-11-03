@@ -14,10 +14,12 @@ async def test_health_and_openapi_use_package_version():
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        health = await client.get("/health")
+        health = await client.get("/api/health")
+        legacy = await client.get("/health")
         schema = await client.get("/openapi.json")
     assert health.status_code == 200
     assert health.json()["version"] == version("metabook-py")
+    assert legacy.json() == health.json()
     assert schema.json()["info"]["version"] == version("metabook-py")
 
 
