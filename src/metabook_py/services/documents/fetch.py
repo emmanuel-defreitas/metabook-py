@@ -1,5 +1,5 @@
 """
-URL fetcher for single-document analysis, with SSRF protection.
+SSRF-protected URL fetcher (single-document analysis, MCP EPUB downloads).
 
 - http/https only; no credentials in the URL.
 - Every address the host resolves to must be globally routable and not
@@ -71,11 +71,8 @@ def _is_ip(host: str) -> bool:
     return True
 
 
-async def _fetch(url: str) -> tuple[bytes, str | None, str]:
-    limit = settings.document_max_bytes
-    async with httpx.AsyncClient(
-        follow_redirects=False, timeout=httpx.Timeout(settings.document_fetch_timeout)
-    ) as client:
+async def _fetch(url: str, limit: int, timeout: float) -> tuple[bytes, str | None, str]:
+    async with httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(timeout)) as client:
         for _ in range(settings.document_max_redirects + 1):
             await validate_url(url)
             async with client.stream("GET", url) as resp:
@@ -96,13 +93,25 @@ async def _fetch(url: str) -> tuple[bytes, str | None, str]:
     raise DocumentFetchError("too many redirects")
 
 
-async def fetch_document(url: str) -> tuple[bytes, str | None, str]:
-    """Return (body, content type, final URL)."""
+async def fetch_url(url: str, *, max_bytes: int, timeout: float) -> tuple[bytes, str | None, str]:
+    """SSRF-checked GET of a public http(s) URL. Returns (body, content type, final URL).
+
+    Raises UrlNotAllowedError, DocumentTooLargeError (body over *max_bytes*),
+    and DocumentFetchError (upstream error, too many redirects, or *timeout*
+    seconds exceeded for the whole fetch).
+    """
     try:
-        return await asyncio.wait_for(_fetch(url), timeout=settings.document_fetch_timeout)
+        return await asyncio.wait_for(_fetch(url, max_bytes, timeout), timeout=timeout)
     except TimeoutError as exc:
         raise DocumentFetchError("fetch timed out", timed_out=True) from exc
     except httpx.TimeoutException as exc:
         raise DocumentFetchError("fetch timed out", timed_out=True) from exc
     except httpx.HTTPError as exc:
         raise DocumentFetchError(str(exc) or type(exc).__name__) from exc
+
+
+async def fetch_document(url: str) -> tuple[bytes, str | None, str]:
+    """fetch_url with the single-document limits (20 MB, 10 s)."""
+    return await fetch_url(
+        url, max_bytes=settings.document_max_bytes, timeout=settings.document_fetch_timeout
+    )
