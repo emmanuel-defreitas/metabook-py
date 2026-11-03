@@ -129,10 +129,13 @@ If the project is linked to Vercel, `vercel env pull` writes the token to `.env.
 
 Set `DATABASE_URL` in `.env.local` (gitignored) to persist metadata and complete
 structural results. The desktop app sends uploads to the API; database credentials
-stay in the API configuration. Aiven connections retain `sslmode=require`:
+stay in the API configuration. Use `sslmode=verify-full` so the client checks the
+server certificate and hostname; `sslmode=require` encrypts the connection but
+accepts any certificate. Aiven signs with a per-project CA: download `ca.pem` from
+the service's overview page and point `sslrootcert` at it:
 
 ```dotenv
-DATABASE_URL="postgres://avnadmin:YOUR_PASSWORD@YOUR_HOST:22637/defaultdb?sslmode=require"
+DATABASE_URL="postgres://avnadmin:YOUR_PASSWORD@YOUR_HOST:22637/defaultdb?sslmode=verify-full&sslrootcert=/path/to/ca.pem"
 # Optional owner identifier for this single-user API instance:
 DEFAULT_USER_ID="your-user-id"
 ```
