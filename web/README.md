@@ -2,7 +2,7 @@
 
 A Next.js port of the desktop client in [`../example`](../example), served from the
 same Vercel domain as the Book Structure API. The web app owns every path except
-`/api/*` (plus the `/mcp` and `/health` aliases), which Vercel routes to the
+`/api/*` (plus `/mcp`, `/health` and `/openapi.json`), which Vercel routes to the
 FastAPI service. See [`../vercel.json`](../vercel.json).
 
 ## Stack

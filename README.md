@@ -257,7 +257,7 @@ Interactive OpenAPI docs live at `/api/docs`.
 [`web/`](web) is a Next.js port of the desktop client (search, filters, EPUB upload,
 saved library and the structure explorer). On Vercel, [`vercel.json`](vercel.json)
 defines two services in one project: the web app answers every path, and `/api/*`
-(plus `/mcp` and `/health`) goes to this FastAPI app. Set the project's
+(plus `/mcp`, `/health` and `/openapi.json`) goes to this FastAPI app. Set the project's
 framework preset to **Services** in the Vercel dashboard. Locally, run `make dev`
 and then `npm run dev` in `web/`; see [web/README.md](web/README.md).
 
