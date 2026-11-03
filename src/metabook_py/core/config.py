@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +24,13 @@ class Settings(BaseSettings):
     blob_folder: str = "books"
     blob_access: str = "private"  # must match the connected store's access mode
     max_upload_bytes: int = 50 * 1024 * 1024  # 50 MB
+    # Single-document analysis (/api/documents/*, MCP analyze_document)
+    document_max_bytes: int = 20 * 1024 * 1024  # 20 MB
+    document_fetch_timeout: float = 10.0  # seconds, whole URL fetch
+    document_max_redirects: int = 5
+    # Parsing core (METABOOK_PARSER). "rust" needs the metabook-core extension
+    # (uv sync --extra rust); without it the Python implementation is used.
+    metabook_parser: Literal["python", "rust"] = "python"
     # MongoDB persistence for the "uploads" collection (one document per book
     # a user uploaded or selected from search results). Empty URI = disabled;
     # every endpoint then behaves exactly as before.

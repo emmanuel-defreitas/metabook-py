@@ -25,7 +25,6 @@ import binascii
 import time
 from datetime import UTC, datetime
 
-import httpx
 from fastmcp import FastMCP
 
 from metabook_py.core.config import settings
@@ -33,18 +32,25 @@ from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BlobUploadError,
     BookNotFoundError,
+    DocumentFetchError,
+    DocumentTooLargeError,
     GutendexUnavailableError,
     InvalidEpubError,
     TextUnavailableError,
+    UrlNotAllowedError,
 )
 from metabook_py.models.book import AuthorInfo, UploadedBookInfo
 from metabook_py.services.blob import upload_epub
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect_schema
 from metabook_py.services.discovery import GutendexClient
+from metabook_py.services.documents.fetch import fetch_url
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
+from metabook_py.services.preprocessing import preprocess_text
 from metabook_py.services.store import get_upload_store, scan_update_doc, upload_doc
+
+EPUB_FETCH_TIMEOUT = 60.0  # seconds, whole download
 
 mcp = FastMCP(
     name="Book Structure MCP",
@@ -52,7 +58,9 @@ mcp = FastMCP(
         "Use 'search_book_structure' to analyse the structural metadata of any "
         "Project Gutenberg book by title, ISBN, or Gutenberg ID. "
         "Use 'upload_book_epub' to store and analyse your own EPUB file. "
-        "Use 'list_supported_schemas' to see which structural types are recognised."
+        "Use 'list_supported_schemas' to see which structural types are recognised. "
+        "Use 'analyze_document' for the section structure of a single HTML, "
+        "Markdown, PDF or plain-text document."
     ),
 )
 
@@ -142,9 +150,11 @@ async def search_book_structure(
             "hint": "The book exists on Gutenberg but its plain-text file could not be retrieved.",
         }
 
-    schema = detect_schema(text, schema_override=schema_override)
+    # Preprocess once here; detect and build then skip their own passes.
+    text = preprocess_text(text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
-        text, schema, include_paragraphs=include_paragraphs, detail=detail
+        text, schema, include_paragraphs=include_paragraphs, detail=detail, preprocessed=True
     )
 
     result = {
@@ -216,13 +226,20 @@ async def upload_book_epub(
         except (binascii.Error, ValueError):
             return {"error": "invalid_base64", "hint": "epub_base64 is not valid base64."}
     else:
+        # Same SSRF rules as analyze-url: public addresses only, every
+        # redirect re-checked, body capped while streaming.
         try:
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                resp = await client.get(epub_url)  # type: ignore[arg-type]
-                resp.raise_for_status()
-                content = resp.content
-        except httpx.HTTPError as exc:
-            return {"error": "download_failed", "url": epub_url, "detail": str(exc)}
+            content, _, _ = await fetch_url(
+                epub_url,  # type: ignore[arg-type]
+                max_bytes=settings.max_upload_bytes,
+                timeout=EPUB_FETCH_TIMEOUT,
+            )
+        except UrlNotAllowedError as exc:
+            return {"error": "url_not_allowed", "url": epub_url, "detail": exc.reason}
+        except DocumentTooLargeError:
+            return {"error": "file_too_large", "max_bytes": settings.max_upload_bytes}
+        except DocumentFetchError as exc:
+            return {"error": "download_failed", "url": epub_url, "detail": exc.reason}
 
     if len(content) > settings.max_upload_bytes:
         return {"error": "file_too_large", "max_bytes": settings.max_upload_bytes}
@@ -237,9 +254,10 @@ async def upload_book_epub(
     except BlobUploadError as exc:
         return {"error": "blob_upload_failed", "detail": exc.reason}
 
-    schema = detect_schema(parsed.text, schema_override=schema_override)
+    text = preprocess_text(parsed.text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
-        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail
+        text, schema, include_paragraphs=include_paragraphs, detail=detail, preprocessed=True
     )
 
     uploaded_book = UploadedBookInfo(
@@ -300,3 +318,48 @@ async def list_supported_schemas() -> list[dict]:
     search_book_structure responses.
     """
     return list(SCHEMA_DEFINITIONS.values())
+
+
+@mcp.tool()
+async def analyze_document(
+    document_base64: str | None = None,
+    url: str | None = None,
+    content_type: str | None = None,
+    filename: str | None = None,
+) -> dict:
+    """
+    Analyse one paper or page (HTML, Markdown, PDF or plain text) and return
+    its semantic structure: sections nested by heading level (content before
+    the first heading in a level-0 preamble), with counts of headings,
+    paragraphs, lists, tables, figures, code blocks, quotes, footnotes,
+    references, links, sentences and words per section and in total.
+    No text content is returned.
+
+    Provide the document one of two ways (exactly one is required):
+
+    document_base64  the file's bytes, base64-encoded (max 20 MB); give
+                     content_type (e.g. "text/markdown") or a filename with an
+                     extension (.html, .md, .pdf, .txt)
+    url              a public http(s) URL (10 s timeout, private addresses refused)
+    """
+    from metabook_py.routers.documents import to_http_error
+    from metabook_py.services.documents import service
+
+    if (document_base64 is None) == (url is None):
+        return {"error": "Provide exactly one of: document_base64, url."}
+    try:
+        if url is not None:
+            result = await service.analyze_document_url(url)
+        else:
+            try:
+                data = base64.b64decode(document_base64 or "", validate=True)
+            except (binascii.Error, ValueError):
+                return {"error": "invalid_base64"}
+            result = service.analyze_document(data, content_type=content_type, filename=filename)
+    except Exception as exc:
+        try:
+            http = to_http_error(exc)
+        except Exception:
+            raise exc from None
+        return {"status": http.status_code, **http.detail}  # type: ignore[dict-item]
+    return result.model_dump(mode="json")

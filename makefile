@@ -68,6 +68,19 @@ mypy: ## Run mypy type checker.
 test: ## Run pytest.
 	@uv run pytest -vv
 
+# ── Native parsing core (rust/metabook_core) ──────────────────────────────────
+
+.PHONY: rust
+rust: ## Build + install the Rust core (then run with METABOOK_PARSER=rust).
+	@uv sync --extra rust
+	@cd rust/metabook_core && cargo build --release --bin metabook
+
+.PHONY: rust-test
+rust-test: ## cargo test + clippy, then pytest under both parsers (parity included).
+	@cd rust/metabook_core && cargo test -q && cargo clippy -q --features python --all-targets -- -D warnings
+	@METABOOK_PARSER=python uv run --extra rust pytest -q
+	@METABOOK_PARSER=rust uv run --extra rust pytest -q
+
 # ── Run & Docker ──────────────────────────────────────────────────────────────
 
 .PHONY: dev

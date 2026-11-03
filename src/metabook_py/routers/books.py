@@ -55,6 +55,7 @@ from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
+from metabook_py.services.preprocessing import preprocess_text
 from metabook_py.services.store import (
     get_upload_store,
     scan_update_doc,
@@ -361,11 +362,18 @@ async def get_book_structure(
         ) from exc
 
     # ── 3. Detect schema ───────────────────────────────────────────────────────
-    schema = detect_schema(text, schema_override=schema_override)
+    # Preprocess once here; detect and build then skip their own passes.
+    text = preprocess_text(text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
 
     # ── 4. Build metadata tree ─────────────────────────────────────────────────
     nodes, summary = build_structure_tree(
-        text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
+        text,
+        schema,
+        include_paragraphs=include_paragraphs,
+        detail=detail,
+        encoder=encoder,
+        preprocessed=True,
     )
 
     processing_ms = int((time.monotonic() - t0) * 1000)
@@ -464,9 +472,15 @@ async def upload_book(
         ) from exc
 
     # ── 3. Detect schema + build metadata tree ─────────────────────────────────
-    schema = detect_schema(parsed.text, schema_override=schema_override)
+    text = preprocess_text(parsed.text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
-        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
+        text,
+        schema,
+        include_paragraphs=include_paragraphs,
+        detail=detail,
+        encoder=encoder,
+        preprocessed=True,
     )
 
     uploaded_book = UploadedBookInfo(

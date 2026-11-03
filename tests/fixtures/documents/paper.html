@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Ignored title text</title>
+  <style>body { font-family: serif; }</style>
+  <script>document.write("<p>not content</p>");</script>
+</head>
+<body>
+  <p>Preamble paragraph before any heading. It links to <a href="https://example.org/draft">the draft</a>.</p>
+  <article>
+    <h1>Document Structure</h1>
+    <p>Opening paragraph of the paper. It has two sentences.</p>
+    <section>
+      <h2>Introduction</h2>
+      <p>Dr. Smith wrote the first draft. The second sentence follows! Does a third one end here?</p>
+      <ul>
+        <li>First point with a <a href="https://example.com/a">link</a>.</li>
+        <li>Second point
+          <ol><li>Nested point</li></ol>
+        </li>
+        <li>Third point</li>
+      </ul>
+      <h3>Background</h3>
+      <blockquote><p>A quoted paragraph. It has two sentences.</p></blockquote>
+      <figure><img src="fig1.png" alt="Figure one"><figcaption>Figure 1. A caption.</figcaption></figure>
+      <h2>Methods</h2>
+      <pre><code>print("code is not counted")</code></pre>
+      <ol><li>Collect documents</li><li>Count blocks</li></ol>
+      <h4>Skipped Level Detail</h4>
+      <p>A paragraph under a level four heading after a level two.</p>
+      <table>
+        <tr><th>Col A</th><th>Col B</th></tr>
+        <tr><td>1</td><td><a href="https://example.com/t">x</a></td></tr>
+      </table>
+      <h2>Notes</h2>
+      <ol class="footnotes"><li id="fn1">A footnote with one sentence.</li></ol>
+      <h2>References</h2>
+      <ul role="doc-bibliography">
+        <li role="doc-biblioentry">Smith, J. Structure of things. 2020.</li>
+        <li>Doe, A. Counting words. 2021.</li>
+      </ul>
+    </section>
+  </article>
+</body>
+</html>
