@@ -1,0 +1,45 @@
+#!/bin/bash
+# Development bundle: keep Python dependencies and secrets in the repository.
+set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+bundle_bin="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$bundle_bin/../../../.." && pwd)"
+log_dir="$HOME/Library/Logs/Metabook"
+mkdir -p "$log_dir"
+exec >>"$log_dir/app.log" 2>&1
+cd "$repo_root"
+api_pid=""
+cleanup() {
+    if [ -n "$api_pid" ]; then
+        kill "$api_pid" 2>/dev/null || true
+        wait "$api_pid" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+api_base="${METABOOK_API:-http://127.0.0.1:8001}"
+if [ "$api_base" = "http://127.0.0.1:8001" ] && ! curl -fsS "$api_base/health" >/dev/null 2>&1; then
+    if [ ! -x "$repo_root/.venv/bin/python" ]; then
+        echo "Run uv sync in the repository before launching Metabook."
+        exit 1
+    fi
+    "$repo_root/.venv/bin/python" -m uvicorn metabook_py.main:app --host 127.0.0.1 --port 8001 \
+        >>"$log_dir/api.log" 2>&1 &
+    api_pid=$!
+    ready=false
+    for ((attempt=0; attempt<60; attempt++)); do
+        if curl -fsS "$api_base/health" >/dev/null 2>&1; then
+            ready=true
+            break
+        fi
+        if ! kill -0 "$api_pid" 2>/dev/null; then
+            echo "API startup failed. See $log_dir/api.log."
+            exit 1
+        fi
+        sleep 0.5
+    done
+    if [ "$ready" != true ]; then
+        echo "API startup timed out. See $log_dir/api.log."
+        exit 1
+    fi
+fi
+METABOOK_API="$api_base" "$bundle_bin/metabook-example"

@@ -53,6 +53,7 @@ from metabook_py.models.book import BlobInfo, BookInfo, UploadedBookInfo
 from metabook_py.models.structure import StructureSummary
 from metabook_py.services.blob import BlobResult
 from metabook_py.services.detector import DetectedSchema
+from metabook_py.services.postgres import PostgresUploadStore
 from metabook_py.services.tokenizers import TokenEncoder
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,7 @@ def scan_update_doc(
         "scan.scope": scope,
         "scan.schema": schema.name.value,
         "scan.schema_confidence": schema.confidence,
+        "scan.schema_score": schema.score,
         "scan.total_tokens": summary.total_tokens,
         "scan.tokenizer": encoder.name if encoder else None,
         "scan.summary": summary.model_dump(),
@@ -207,6 +209,7 @@ def upload_doc(
             "scope": scope,
             "schema": schema.name.value,
             "schema_confidence": schema.confidence,
+            "schema_score": schema.score,
             "total_tokens": summary.total_tokens,
             "tokenizer": encoder.name if encoder else None,
             "summary": summary.model_dump(),
@@ -288,7 +291,8 @@ class UploadStore:
         try:
             col = await self._ensure_indexes()
             await col.update_one(
-                {"source": "gutenberg", "gutenberg_id": gutenberg_id}, {"$set": scan_set}
+                {"source": "gutenberg", "gutenberg_id": gutenberg_id},
+                {"$set": {k: v for k, v in scan_set.items() if k != "result"}},
             )
         except PyMongoError as exc:
             logger.warning("uploads: couldn't record scan for book %s: %s", gutenberg_id, exc)
@@ -299,7 +303,7 @@ class UploadStore:
             return None
         try:
             col = await self._ensure_indexes()
-            result = await col.insert_one(doc)
+            result = await col.insert_one({k: v for k, v in doc.items() if k != "result"})
             return str(result.inserted_id)
         except PyMongoError as exc:
             logger.warning("uploads: couldn't record upload: %s", exc)
@@ -324,17 +328,32 @@ class UploadStore:
         if self._client is not None:
             await self._client.close()
 
+    async def initialize(self) -> None:
+        # Preserve the legacy store's lazy, best-effort behavior.
+        pass
+
+    async def check_health(self) -> None:
+        pass
+
+    async def get_result(self, book_id: str) -> dict[str, Any] | None:
+        # Historical MongoDB records store summary counts only.
+        return None
+
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
 
-_store: UploadStore | None = None
+_store: UploadStore | PostgresUploadStore | None = None
 
 
-def get_upload_store() -> UploadStore:
+def get_upload_store() -> UploadStore | PostgresUploadStore:
     """Lazily build the process-wide store from current settings."""
     global _store
     if _store is None:
-        _store = UploadStore(settings.mongodb_uri, settings.mongodb_db)
+        _store = (
+            PostgresUploadStore(settings.database_url, settings.default_user_id)
+            if settings.database_url
+            else UploadStore(settings.mongodb_uri, settings.mongodb_db)
+        )
     return _store
 
 

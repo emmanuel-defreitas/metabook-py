@@ -2,6 +2,8 @@
 REST router — /api/books/
 
 GET  /api/books/structure         → BookStructureResponse | DisambiguationResult
+GET  /api/books/search            → BookSearchResponse
+GET  /api/books/catalog/search    → CatalogSearchResponse
 GET  /api/books/structure/schemas → list[SchemaInfo]
 POST /api/books/upload            → BookUploadResponse
 GET  /api/books/uploads           → list[UploadRecord]
@@ -19,19 +21,24 @@ from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BlobUploadError,
     BookNotFoundError,
+    CatalogProviderError,
+    CatalogValidationError,
     GutendexUnavailableError,
     InvalidEpubError,
     TextUnavailableError,
     TokenizerNotFoundError,
     TokenizerUnavailableError,
+    UnsupportedFormatError,
 )
 from metabook_py.models.book import (
     AuthorInfo,
     BlobInfo,
+    BookSearchResponse,
     DisambiguationResult,
     SchemaInfo,
     UploadedBookInfo,
 )
+from metabook_py.models.catalog import CatalogSearchResponse
 from metabook_py.models.structure import (
     BookStructureResponse,
     BookUploadResponse,
@@ -42,11 +49,13 @@ from metabook_py.models.structure import (
 )
 from metabook_py.models.upload import UploadRecord
 from metabook_py.services.blob import upload_epub
+from metabook_py.services.catalog import CatalogSearchService
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect_schema
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
+from metabook_py.services.preprocessing import preprocess_text
 from metabook_py.services.store import (
     get_upload_store,
     scan_update_doc,
@@ -65,6 +74,113 @@ def get_gutendex_client() -> GutendexClient:
 
 
 GutendexDep = Annotated[GutendexClient, Depends(get_gutendex_client)]
+
+
+def get_catalog_service() -> CatalogSearchService:
+    return CatalogSearchService()
+
+
+CatalogDep = Annotated[CatalogSearchService, Depends(get_catalog_service)]
+
+
+@router.get(
+    "/catalog/search",
+    response_model=CatalogSearchResponse,
+    summary="Search live catalog metadata without scanning or saving",
+    description=(
+        "Each selected provider is queried at the same page; results are concatenated "
+        "Gutendex then OpenAlex, with summed counts (no cross-provider deduplication). "
+        "Empty source selection means Gutendex only. Filters are OR within each dimension "
+        "and AND across dimensions. All selected providers must support all filters. "
+        "OpenAlex uses per_page=32 and supports pages 1–312. When OpenAlex is selected, "
+        "paging stops at 312 even in combined searches; warnings explain remaining matches "
+        "and suggest narrowing the query or switching to Gutendex-only paging. "
+        "Gutendex subject keys map to its case-insensitive topic phrase search, not an "
+        "exact upstream subject index. ISBN remains a best-effort Gutendex keyword search."
+    ),
+    responses={
+        422: {"description": "Invalid or unsupported query/filter combination"},
+        429: {"description": "Provider rate limit exceeded; retry with backoff"},
+        502: {"description": "Provider failed or returned invalid metadata"},
+        504: {"description": "Provider request timed out"},
+    },
+)
+async def search_catalog(
+    service: CatalogDep,
+    q: str | None = Query(None),
+    isbn: str | None = Query(None),
+    gutenberg_id: int | None = Query(None, gt=0),
+    page: int = Query(1, ge=1),
+    date: Annotated[
+        list[str] | None,
+        Query(
+            description="today, 7days/30days/year=rolling 365 days, all inclusive of today in UTC"
+        ),
+    ] = None,
+    category: Annotated[
+        list[str] | None, Query(description="subject:<exact subject> or domain:1..4")
+    ] = None,
+    kind: Annotated[
+        list[str] | None,
+        Query(
+            description="book, academic, or other (OpenAlex type other); schema kinds are saved-only"
+        ),
+    ] = None,
+    source: Annotated[
+        list[str] | None, Query(description="gutendex and/or openalex; repeated keys")
+    ] = None,
+) -> CatalogSearchResponse:
+    try:
+        return await service.search(
+            q=q,
+            isbn=isbn,
+            gutenberg_id=gutenberg_id,
+            page=page,
+            date=date,
+            category=category,
+            kind=kind,
+            source=source,
+        )
+    except CatalogValidationError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    except CatalogProviderError as exc:
+        raise HTTPException(
+            exc.status_code,
+            detail={
+                "error": f"{exc.provider}_unavailable",
+                "provider": exc.provider,
+                "message": exc.message,
+            },
+        ) from exc
+
+
+@router.get("/search", response_model=BookSearchResponse)
+async def search_books(
+    client: GutendexDep,
+    q: str | None = Query(None, description="Words in book titles or author names"),
+    isbn: str | None = Query(
+        None, description="Best-effort keyword search; no Gutendex ISBN index"
+    ),
+    gutenberg_id: int | None = Query(None, gt=0),
+    language: str | None = Query(
+        None, description="Comma-separated language codes; all by default"
+    ),
+    page: int = Query(1, ge=1),
+) -> BookSearchResponse:
+    """Search Gutendex metadata. Selection and structural analysis are separate."""
+    q = q.strip() if q else None
+    isbn = isbn.strip() if isbn else None
+    if not any((q, isbn, gutenberg_id)):
+        raise HTTPException(422, detail="Provide a title/author query, ISBN, or Gutenberg ID.")
+    try:
+        return await client.list_books(
+            query=q, isbn=isbn, gutenberg_id=gutenberg_id, language=language, page=page
+        )
+    except GutendexUnavailableError as exc:
+        raise HTTPException(
+            status_code=504 if exc.timed_out else 502,
+            detail={"error": "gutendex_unreachable", "message": exc.reason},
+        ) from exc
 
 
 def _validate_detail(detail: str) -> None:
@@ -216,6 +332,16 @@ async def get_book_structure(
             detail={"error": "gutendex_unreachable", "message": exc.reason},
         ) from exc
 
+    except UnsupportedFormatError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "unsupported_format",
+                "message": "This Gutendex book has no text or HTML format for structural analysis.",
+                "gutenberg_id": exc.gutenberg_id,
+            },
+        ) from exc
+
     # A book was selected from the search results — persist it (unscanned)
     # so a later text-fetch failure still leaves a record behind.
     store = get_upload_store()
@@ -236,21 +362,23 @@ async def get_book_structure(
         ) from exc
 
     # ── 3. Detect schema ───────────────────────────────────────────────────────
-    schema = detect_schema(text, schema_override=schema_override)
+    # Preprocess once here; detect and build then skip their own passes.
+    text = preprocess_text(text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
 
     # ── 4. Build metadata tree ─────────────────────────────────────────────────
     nodes, summary = build_structure_tree(
-        text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
-    )
-
-    # The scan ran — mark the stored document as scanned with its results.
-    await store.record_scan(
-        book_info.gutenberg_id, scan_update_doc(schema, detail, summary, encoder)
+        text,
+        schema,
+        include_paragraphs=include_paragraphs,
+        detail=detail,
+        encoder=encoder,
+        preprocessed=True,
     )
 
     processing_ms = int((time.monotonic() - t0) * 1000)
 
-    return BookStructureResponse(
+    response = BookStructureResponse(
         book=book_info,
         structure=StructureDetail(
             **{"schema": schema.name.value, **schema.explanation()},
@@ -265,6 +393,10 @@ async def get_book_structure(
             tokenizer=_tokenizer_info(encoder),
         ),
     )
+    scan_set = scan_update_doc(schema, detail, summary, encoder)
+    scan_set["result"] = response.model_dump(mode="json", by_alias=True)
+    response.record_id = await store.record_scan(book_info.gutenberg_id, scan_set)
+    return response
 
 
 @router.post(
@@ -340,9 +472,15 @@ async def upload_book(
         ) from exc
 
     # ── 3. Detect schema + build metadata tree ─────────────────────────────────
-    schema = detect_schema(parsed.text, schema_override=schema_override)
+    text = preprocess_text(parsed.text)
+    schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
-        parsed.text, schema, include_paragraphs=include_paragraphs, detail=detail, encoder=encoder
+        text,
+        schema,
+        include_paragraphs=include_paragraphs,
+        detail=detail,
+        encoder=encoder,
+        preprocessed=True,
     )
 
     uploaded_book = UploadedBookInfo(
@@ -351,17 +489,16 @@ async def upload_book(
         language=parsed.metadata.language,
         subjects=parsed.metadata.subjects,
         isbn=parsed.metadata.isbn,
+        publisher=parsed.metadata.publisher,
+        license=parsed.metadata.license,
+        date=parsed.metadata.date,
+        number_of_pages=parsed.metadata.number_of_pages,
     )
     blob_info = BlobInfo(url=blob.url, pathname=blob.pathname, size_bytes=blob.size)
 
-    # ── 4. Persist the upload document (metadata + scan results, never the tree)
-    await get_upload_store().record_upload(
-        upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
-    )
-
     processing_ms = int((time.monotonic() - t0) * 1000)
 
-    return BookUploadResponse(
+    response = BookUploadResponse(
         book=uploaded_book,
         blob=blob_info,
         structure=StructureDetail(
@@ -377,6 +514,12 @@ async def upload_book(
             tokenizer=_tokenizer_info(encoder),
         ),
     )
+    # PostgreSQL commits relationships and the public structural result together.
+    # MongoDB retains its historical summary-only representation.
+    doc = upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
+    doc["result"] = response.model_dump(mode="json", by_alias=True)
+    response.record_id = await get_upload_store().record_upload(doc)
+    return response
 
 
 @router.get(
@@ -391,11 +534,22 @@ async def list_uploads(
     ),
 ) -> list[UploadRecord]:
     """
-    List the documents persisted in the `uploads` collection — one per book
+    List the persisted library — one record per book
     uploaded or selected from search results, newest first. Each carries the
     book metadata, the Vercel Blob link (uploads), and the current scan state
-    (scanned, scope, schema, total tokens). Requires MONGODB_URI to be set;
-    returns an empty list otherwise.
+    (scanned, scope, schema, total tokens). PostgreSQL uses DATABASE_URL;
+    historical MongoDB storage uses MONGODB_URI. Unconfigured storage returns [].
     """
     docs = await get_upload_store().list_uploads(limit=limit, source=source)
     return [UploadRecord.model_validate(doc) for doc in docs]
+
+
+@router.get(
+    "/uploads/{book_id}/structure", response_model=BookUploadResponse | BookStructureResponse
+)
+async def stored_structure(book_id: str):
+    """Open a committed scan from PostgreSQL without fetching or exposing book text."""
+    result = await get_upload_store().get_result(book_id)
+    if result is None:
+        raise HTTPException(404, detail={"error": "saved_result_not_found"})
+    return result

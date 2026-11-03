@@ -24,6 +24,20 @@ class GutendexUnavailableError(Exception):
         super().__init__(f"Gutendex unreachable: {reason}")
 
 
+class CatalogValidationError(ValueError):
+    """Unsupported or invalid live-catalog query, rejected before provider requests."""
+
+
+class CatalogProviderError(Exception):
+    """Safe provider failure details; never include request headers or raw upstream bodies."""
+
+    def __init__(self, provider: str, message: str, *, status_code: int = 502):
+        self.provider = provider
+        self.message = message
+        self.status_code = status_code
+        super().__init__(f"{provider}: {message}")
+
+
 class TextUnavailableError(Exception):
     """Raised when the Gutenberg download URL fails or returns no usable content."""
 
@@ -77,3 +91,48 @@ class UnsupportedFormatError(Exception):
         super().__init__(
             f"No supported text format for book #{gutenberg_id}. Available: {available_formats}"
         )
+
+
+# ── Single-document analysis ───────────────────────────────────────────────────
+
+
+class DocumentTooLargeError(Exception):
+    """Raised when an uploaded or fetched document exceeds the size limit."""
+
+    def __init__(self, max_bytes: int):
+        self.max_bytes = max_bytes
+        super().__init__(f"Document exceeds {max_bytes} bytes")
+
+
+class UnsupportedDocumentTypeError(Exception):
+    """Raised when a document's content type / extension is not accepted."""
+
+    def __init__(self, content_type: str | None, allowed: list[str]):
+        self.content_type = content_type
+        self.allowed = allowed
+        super().__init__(f"Unsupported document type: {content_type!r}")
+
+
+class InvalidDocumentError(Exception):
+    """Raised when a document of an accepted type cannot be parsed."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"Invalid document: {reason}")
+
+
+class UrlNotAllowedError(Exception):
+    """Raised when a URL fails validation (scheme, or resolves to a non-public address)."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"URL not allowed: {reason}")
+
+
+class DocumentFetchError(Exception):
+    """Raised when fetching a document URL fails or times out."""
+
+    def __init__(self, reason: str, *, timed_out: bool = False):
+        self.reason = reason
+        self.timed_out = timed_out
+        super().__init__(f"Document fetch failed: {reason}")

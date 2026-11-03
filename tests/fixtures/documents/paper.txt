@@ -1,0 +1,47 @@
+Preamble paragraph before any heading. It links to https://example.org/draft here.
+
+Document Structure
+==================
+
+Opening paragraph of the paper. It has two sentences.
+
+Introduction
+------------
+
+Dr. Smith wrote the first draft. The second sentence follows! Does a third one end here?
+
+- First point with a link https://example.com/a
+- Second point
+  - Nested point
+- Third point
+
+2.1.1 Background
+
+> A quoted paragraph. It has two sentences.
+
+Figure 1. A caption for the first figure.
+
+Methods
+-------
+
+1) Collect documents
+2) Count blocks
+
+2.2.1.1 Skipped Level Detail
+
+A paragraph under a level four heading after a level two.
+
+Col A | Col B
+1     | 2
+
+Notes
+-----
+
+[^1]: A footnote with one sentence.
+
+References
+----------
+
+[1] Smith, J. Structure of things. 2020.
+
+[2] Doe, A. Counting words. 2021.
