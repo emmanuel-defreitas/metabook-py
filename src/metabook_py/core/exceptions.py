@@ -24,6 +24,20 @@ class GutendexUnavailableError(Exception):
         super().__init__(f"Gutendex unreachable: {reason}")
 
 
+class CatalogValidationError(ValueError):
+    """Unsupported or invalid live-catalog query, rejected before provider requests."""
+
+
+class CatalogProviderError(Exception):
+    """Safe provider failure details; never include request headers or raw upstream bodies."""
+
+    def __init__(self, provider: str, message: str, *, status_code: int = 502):
+        self.provider = provider
+        self.message = message
+        self.status_code = status_code
+        super().__init__(f"{provider}: {message}")
+
+
 class TextUnavailableError(Exception):
     """Raised when the Gutenberg download URL fails or returns no usable content."""
 

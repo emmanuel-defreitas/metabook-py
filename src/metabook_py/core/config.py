@@ -1,3 +1,4 @@
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,8 @@ class Settings(BaseSettings):
     )
 
     gutendex_base_url: str = "https://gutendex.com"
+    openalex_base_url: str = "https://api.openalex.org"
+    openalex_api_key: SecretStr | None = None
     cache_ttl: int = 86400  # 24 hours in seconds
     rate_limit_per_second: float = 1.0
     max_disambiguations: int = 10

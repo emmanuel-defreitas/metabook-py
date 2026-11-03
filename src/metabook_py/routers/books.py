@@ -3,6 +3,7 @@ REST router — /api/books/
 
 GET  /api/books/structure         → BookStructureResponse | DisambiguationResult
 GET  /api/books/search            → BookSearchResponse
+GET  /api/books/catalog/search    → CatalogSearchResponse
 GET  /api/books/structure/schemas → list[SchemaInfo]
 POST /api/books/upload            → BookUploadResponse
 GET  /api/books/uploads           → list[UploadRecord]
@@ -20,6 +21,8 @@ from metabook_py.core.exceptions import (
     AmbiguousBookError,
     BlobUploadError,
     BookNotFoundError,
+    CatalogProviderError,
+    CatalogValidationError,
     GutendexUnavailableError,
     InvalidEpubError,
     TextUnavailableError,
@@ -35,6 +38,7 @@ from metabook_py.models.book import (
     SchemaInfo,
     UploadedBookInfo,
 )
+from metabook_py.models.catalog import CatalogSearchResponse
 from metabook_py.models.structure import (
     BookStructureResponse,
     BookUploadResponse,
@@ -45,6 +49,7 @@ from metabook_py.models.structure import (
 )
 from metabook_py.models.upload import UploadRecord
 from metabook_py.services.blob import upload_epub
+from metabook_py.services.catalog import CatalogSearchService
 from metabook_py.services.counter import DETAIL_LEVELS, build_structure_tree
 from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect_schema
 from metabook_py.services.discovery import GutendexClient
@@ -68,6 +73,84 @@ def get_gutendex_client() -> GutendexClient:
 
 
 GutendexDep = Annotated[GutendexClient, Depends(get_gutendex_client)]
+
+
+def get_catalog_service() -> CatalogSearchService:
+    return CatalogSearchService()
+
+
+CatalogDep = Annotated[CatalogSearchService, Depends(get_catalog_service)]
+
+
+@router.get(
+    "/catalog/search",
+    response_model=CatalogSearchResponse,
+    summary="Search live catalog metadata without scanning or saving",
+    description=(
+        "Each selected provider is queried at the same page; results are concatenated "
+        "Gutendex then OpenAlex, with summed counts (no cross-provider deduplication). "
+        "Empty source selection means Gutendex only. Filters are OR within each dimension "
+        "and AND across dimensions. All selected providers must support all filters. "
+        "OpenAlex uses per_page=32 and supports pages 1–312. When OpenAlex is selected, "
+        "paging stops at 312 even in combined searches; warnings explain remaining matches "
+        "and suggest narrowing the query or switching to Gutendex-only paging. "
+        "Gutendex subject keys map to its case-insensitive topic phrase search, not an "
+        "exact upstream subject index. ISBN remains a best-effort Gutendex keyword search."
+    ),
+    responses={
+        422: {"description": "Invalid or unsupported query/filter combination"},
+        429: {"description": "Provider rate limit exceeded; retry with backoff"},
+        502: {"description": "Provider failed or returned invalid metadata"},
+        504: {"description": "Provider request timed out"},
+    },
+)
+async def search_catalog(
+    service: CatalogDep,
+    q: str | None = Query(None),
+    isbn: str | None = Query(None),
+    gutenberg_id: int | None = Query(None, gt=0),
+    page: int = Query(1, ge=1),
+    date: Annotated[
+        list[str] | None,
+        Query(
+            description="today, 7days/30days/year=rolling 365 days, all inclusive of today in UTC"
+        ),
+    ] = None,
+    category: Annotated[
+        list[str] | None, Query(description="subject:<exact subject> or domain:1..4")
+    ] = None,
+    kind: Annotated[
+        list[str] | None,
+        Query(
+            description="book, academic, or other (OpenAlex type other); schema kinds are saved-only"
+        ),
+    ] = None,
+    source: Annotated[
+        list[str] | None, Query(description="gutendex and/or openalex; repeated keys")
+    ] = None,
+) -> CatalogSearchResponse:
+    try:
+        return await service.search(
+            q=q,
+            isbn=isbn,
+            gutenberg_id=gutenberg_id,
+            page=page,
+            date=date,
+            category=category,
+            kind=kind,
+            source=source,
+        )
+    except CatalogValidationError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    except CatalogProviderError as exc:
+        raise HTTPException(
+            exc.status_code,
+            detail={
+                "error": f"{exc.provider}_unavailable",
+                "provider": exc.provider,
+                "message": exc.message,
+            },
+        ) from exc
 
 
 @router.get("/search", response_model=BookSearchResponse)
