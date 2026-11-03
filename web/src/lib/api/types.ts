@@ -126,3 +126,57 @@ export interface CatalogPage {
   results: CatalogResult[];
   warnings: string[];
 }
+
+// ── Single-document analysis (/api/documents/*) ────────────────────────────────
+
+export type DocumentFormat = "html" | "markdown" | "pdf" | "text";
+
+export interface DocumentCounts {
+  headings: number;
+  paragraphs: number;
+  lists: number;
+  list_items: number;
+  tables: number;
+  figures: number;
+  code_blocks: number;
+  blockquotes: number;
+  footnotes: number;
+  references: number;
+  links: number;
+  sentences: number;
+  words: number;
+}
+
+export interface DocumentTotals extends DocumentCounts {
+  sections: number;
+  max_depth: number;
+}
+
+export interface SectionNode {
+  kind: "preamble" | "section";
+  level: number;
+  index: number;
+  path: string;
+  counts: DocumentCounts;
+  totals: DocumentCounts;
+  children: SectionNode[];
+}
+
+export interface DocumentAnalysis {
+  document: {
+    format: DocumentFormat;
+    content_type: string;
+    size_bytes: number;
+    sha256: string;
+    page_count?: number | null;
+    filename?: string | null;
+    source_url?: string | null;
+  };
+  structure: { totals: DocumentTotals; sections: SectionNode[] };
+  meta: {
+    schema_version: string;
+    parser: "python" | "rust";
+    processing_time_ms: number;
+    analyzed_at: string;
+  };
+}

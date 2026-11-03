@@ -1,7 +1,7 @@
 // Browser client for the Book Structure API, served from the same origin
 // under /api (Vercel services in production, a Next.js rewrite in dev).
 
-import type { Analysis, CatalogPage, UploadRecord } from "./types";
+import type { Analysis, CatalogPage, DocumentAnalysis, UploadRecord } from "./types";
 
 const BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "").replace(/\/$/, "");
 
@@ -19,11 +19,12 @@ export class ApiError extends Error {
   }
 }
 
-type Detail = Record<string, unknown> | string | null | undefined;
+type Detail = Record<string, unknown> | { msg?: unknown }[] | string | null | undefined;
 
 /** Human-readable message for an API error body (mirrors the desktop app). */
 export function describeError(status: number, detail: Detail): string {
-  const obj = typeof detail === "object" && detail ? detail : {};
+  const obj: Record<string, unknown> =
+    typeof detail === "object" && detail && !Array.isArray(detail) ? detail : {};
   const kind = (typeof detail === "string" ? detail : (obj.error as string)) ?? "";
   const message = typeof obj.message === "string" ? obj.message : undefined;
   switch (kind) {
@@ -37,7 +38,21 @@ export function describeError(status: number, detail: Detail): string {
     case "invalid_file":
       return `Invalid EPUB: ${message ?? "The file isn't a valid EPUB."}`;
     case "file_too_large":
-      return "That EPUB exceeds the API's upload size limit.";
+      return typeof obj.max_bytes === "number"
+        ? `That file exceeds the API's ${Math.round(obj.max_bytes / 1024 / 1024)} MB limit.`
+        : "That file exceeds the API's upload size limit.";
+    case "unsupported_type":
+      return "That file type isn't supported. Use HTML, Markdown, PDF or plain text.";
+    case "invalid_document":
+      return `The document couldn't be parsed: ${message ?? "it may be damaged or empty."}`;
+    case "url_not_allowed":
+      return `That URL can't be fetched: ${message ?? "only public http(s) addresses are allowed."}`;
+    case "fetch_timeout":
+      return "The page took longer than 10 seconds to download. Try again or upload the file instead.";
+    case "fetch_failed":
+      return `The URL couldn't be downloaded: ${message ?? "the server returned an error."}`;
+    case "database_unavailable":
+      return "The API's database is unavailable right now. Try again shortly.";
     case "tokenizer_not_found":
       return `Tokenizer “${obj.tokenizer ?? "that tokenizer"}” wasn't found on the Hugging Face Hub.`;
     case "tokenizer_unavailable":
@@ -47,10 +62,14 @@ export function describeError(status: number, detail: Detail): string {
     case "saved_result_not_found":
       return "That saved result no longer exists.";
   }
+  // FastAPI request validation: [{loc, msg, type}, ...]
+  if (Array.isArray(detail) && typeof detail[0]?.msg === "string") {
+    return `The request was rejected: ${detail[0].msg}.`;
+  }
   if (status === 404 && !kind) {
     return "This API deployment doesn't provide that endpoint yet.";
   }
-  if (status === 413) return "That EPUB is larger than the host accepts for uploads.";
+  if (status === 413) return "That file is larger than the host accepts for uploads.";
   if (status === 422 && typeof detail === "string" && detail.trim()) return detail;
   if ([429, 502, 504].includes(status) && message) return message;
   return `The API returned an error (HTTP ${status}).`;
@@ -63,7 +82,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: { Accept: "application/json", ...init?.headers },
     });
-  } catch {
+  } catch (error) {
+    if (init?.signal?.aborted) throw error;
     throw new ApiError("Couldn't reach the API. Check your connection and try again.", 0);
   }
   const text = await response.text();
@@ -162,19 +182,16 @@ export interface UploadProgress {
   total: number;
 }
 
-/** Multipart EPUB upload; XHR so the real request bytes can be reported. */
-export function uploadEpub(
+/** Multipart upload over XHR, so the real request bytes can be reported. */
+function uploadFile<T>(
+  path: string,
   file: File,
   onProgress: (progress: UploadProgress) => void,
-): { promise: Promise<Analysis>; abort: () => void } {
+  validate: (body: T) => T,
+): { promise: Promise<T>; abort: () => void } {
   const xhr = new XMLHttpRequest();
-  const params = new URLSearchParams({
-    include_paragraphs: "true",
-    detail: SCAN_DETAIL,
-    tokenizer: SCAN_TOKENIZER,
-  });
-  const promise = new Promise<Analysis>((resolve, reject) => {
-    xhr.open("POST", `${BASE}/api/books/upload?${params}`);
+  const promise = new Promise<T>((resolve, reject) => {
+    xhr.open("POST", `${BASE}${path}`);
     xhr.setRequestHeader("Accept", "application/json");
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress({ loaded: event.loaded, total: event.total });
@@ -191,7 +208,7 @@ export function uploadEpub(
       }
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
-          resolve(validAnalysis(body as Analysis));
+          resolve(validate(body as T));
         } catch (error) {
           reject(error);
         }
@@ -205,6 +222,43 @@ export function uploadEpub(
     xhr.send(form);
   });
   return { promise, abort: () => xhr.abort() };
+}
+
+export function uploadEpub(file: File, onProgress: (progress: UploadProgress) => void) {
+  const params = new URLSearchParams({
+    include_paragraphs: "true",
+    detail: SCAN_DETAIL,
+    tokenizer: SCAN_TOKENIZER,
+  });
+  return uploadFile<Analysis>(`/api/books/upload?${params}`, file, onProgress, validAnalysis);
+}
+
+// ── Single documents ───────────────────────────────────────────────────────────
+
+/** Extensions the document endpoints accept (docs/single-document-schema.md). */
+export const DOCUMENT_ACCEPT =
+  ".html,.htm,.xhtml,.md,.markdown,.pdf,.txt,.text,text/html,application/xhtml+xml,text/markdown,application/pdf,text/plain";
+
+function validDocument(value: DocumentAnalysis): DocumentAnalysis {
+  if (!value?.document?.format || !Array.isArray(value.structure?.sections)) {
+    throw new ApiError("The API response is missing a document structure.", 200);
+  }
+  return value;
+}
+
+export function uploadDocument(file: File, onProgress: (progress: UploadProgress) => void) {
+  return uploadFile<DocumentAnalysis>("/api/documents/analyze", file, onProgress, validDocument);
+}
+
+export async function analyseDocumentUrl(url: string, signal?: AbortSignal): Promise<DocumentAnalysis> {
+  return validDocument(
+    await request<DocumentAnalysis>("/api/documents/analyze-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+      signal,
+    }),
+  );
 }
 
 export function gutenbergCoverUrl(id: number): string {

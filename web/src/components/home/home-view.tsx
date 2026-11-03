@@ -1,6 +1,7 @@
 "use client";
 
-import { LockKeyIcon, TreeStructureIcon, WaveformIcon } from "@phosphor-icons/react";
+import { ArrowRightIcon, LockKeyIcon, TreeStructureIcon, WaveformIcon } from "@phosphor-icons/react";
+import Link from "next/link";
 import { useState } from "react";
 import { Mark } from "@/components/brand/mark";
 import { DropZone } from "@/components/library/drop-zone";
@@ -61,8 +62,15 @@ export function HomeView() {
       </section>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <Reveal className="lg:col-span-7">
+        <Reveal className="flex flex-col gap-3 lg:col-span-7">
           <DropZone />
+          <Link
+            className="group flex w-max items-center gap-2 self-center rounded-full px-3 py-1.5 text-muted-foreground text-sm outline-none transition-colors duration-300 ease-spring hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            href="/documents"
+          >
+            Not a book? Outline an HTML, Markdown, PDF or text document
+            <ArrowRightIcon className="transition-transform duration-500 ease-spring group-hover:translate-x-0.5" weight="light" />
+          </Link>
         </Reveal>
         <div className="flex flex-col gap-3 lg:col-span-5">
           {FACTS.map((fact, index) => (

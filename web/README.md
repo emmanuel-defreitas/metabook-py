@@ -31,6 +31,7 @@ copy-paste patterns at <https://coss.com/ui/particles>.
 | NetworkGraph with 12-per-page drill-down | Radial structure map (double-click or Enter to open a node) |
 | Lazy structure tree + JSON editor, Full JSON, Copy JSON | Tree, node JSON pane, Full JSON dialog, copy and download |
 | Metadata, totals, evidence and candidate scores | Metadata sections below the explorer |
+| _(API only)_ Single-document analysis | `/documents`: upload HTML, Markdown, PDF or text, or fetch a public URL; section outline with own and cumulative counts |
 
 Scans use `detail=sentence` and `tokenizer=bert-base-uncased`, like the desktop.
 
@@ -60,7 +61,9 @@ npm run build
 - `GET /api/books/uploads/{id}/structure`: reopen a saved result
 - `GET /api/books/structure?gutenberg_id=…`: analyse and save a Gutenberg book
 - `POST /api/books/upload`: analyse an EPUB
+- `POST /api/documents/analyze`: outline one uploaded document (not saved)
+- `POST /api/documents/analyze-url`: fetch a public URL and outline it
 
-The first three ship with the desktop's backend work (`feat/gpui-update`). Until
-that reaches `dev`, the web app shows a clear "endpoint not available" message
-for catalog search and saved results.
+Uploads go through the API's Vercel function, which accepts request bodies up to
+about 4.5 MB in production, below the API's own 50 MB (EPUB) and 20 MB (document)
+limits. Larger files work locally.

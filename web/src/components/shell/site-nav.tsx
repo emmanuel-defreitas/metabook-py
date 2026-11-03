@@ -24,6 +24,12 @@ export function SiteNav() {
         >
           Library
         </Link>
+        <Link
+          className="rounded-full px-3 py-1.5 text-muted-foreground text-sm outline-none transition-colors duration-300 ease-spring hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          href="/documents"
+        >
+          Documents
+        </Link>
         <ThemeToggle />
       </nav>
     </header>
