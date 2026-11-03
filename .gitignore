@@ -29,3 +29,11 @@ example/.gpui
 
 # Rust
 rust/**/target/
+
+# Skill files the open-knowledge tool installs per agent
+.claude/skills/open-knowledge/
+.cursor/skills/open-knowledge/
+.codex/skills/open-knowledge/
+.github/skills/open-knowledge/
+.opencode/skills/open-knowledge/
+.pi/skills/open-knowledge/
