@@ -14,7 +14,7 @@ import {
   ProgressValue,
 } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { analyseDocumentUrl, DOCUMENT_ACCEPT, type UploadProgress, uploadDocument } from "@/lib/api/client";
+import { analyseDocumentUrl, DOCUMENT_ACCEPT, DOCUMENT_MAX_BYTES, type UploadProgress, uploadDocument } from "@/lib/api/client";
 import type { DocumentAnalysis } from "@/lib/api/types";
 import { normalizeUrl } from "@/lib/document";
 import { formatBytes } from "@/lib/format";
@@ -48,6 +48,10 @@ export function DocumentView() {
 
   const upload = (file: File | undefined) => {
     if (!file || busy) return;
+    if (file.size > DOCUMENT_MAX_BYTES) {
+      setState({ phase: "error", source: file.name, message: "That file exceeds the 20 MB limit. Choose a smaller document." });
+      return;
+    }
     const { promise, abort } = uploadDocument(file, (progress) =>
       setState((current) => (current.phase === "uploading" ? { ...current, progress } : current)),
     );
@@ -75,7 +79,7 @@ export function DocumentView() {
   };
 
   const uploading = state.phase === "uploading" ? state : null;
-  const sent = uploading && uploading.progress.loaded >= uploading.progress.total;
+  const sent = uploading && uploading.progress.phase === "processing";
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-16 px-4 pt-16 pb-32 sm:px-8 sm:pt-24">
@@ -118,6 +122,10 @@ export function DocumentView() {
               onDrop={(event) => {
                 event.preventDefault();
                 setDragging(false);
+                if (event.dataTransfer.files.length !== 1) {
+                  if (!busy) setState({ phase: "error", source: "these files", message: "Choose one document at a time." });
+                  return;
+                }
                 upload(event.dataTransfer.files[0]);
               }}
             >
@@ -133,22 +141,20 @@ export function DocumentView() {
                   <Progress max={uploading.progress.total || 1} value={sent ? null : uploading.progress.loaded}>
                     <div className="flex items-center justify-between gap-2">
                       <ProgressLabel className="truncate">
-                        {sent ? "Building the outline…" : `Uploading ${uploading.name}`}
+                        {sent ? "Upload complete · Building the outline…" : `Uploading ${uploading.name}`}
                       </ProgressLabel>
                       {!sent && <ProgressValue />}
                     </div>
                     <ProgressTrack className="h-1.5 rounded-full">
-                      <ProgressIndicator className="rounded-full" />
+                      <ProgressIndicator className={cn("rounded-full", sent && "w-full! animate-pulse")} />
                     </ProgressTrack>
                   </Progress>
                   <p className="text-subtle-foreground text-xs">
-                    {formatBytes(uploading.progress.loaded)} of {formatBytes(uploading.progress.total)}
+                    {sent ? "Processing the document. You can cancel while waiting." : `${formatBytes(uploading.progress.loaded)} of ${formatBytes(uploading.progress.total)}`}
                   </p>
-                  {!sent && (
-                    <Button className="self-center" onClick={uploading.abort} size="sm" variant="ghost">
+                  <Button className="self-center" onClick={uploading.abort} size="sm" variant="ghost">
                       Cancel
-                    </Button>
-                  )}
+                  </Button>
                 </div>
               ) : (
                 <>
@@ -162,8 +168,8 @@ export function DocumentView() {
                     onClick={() => input.current?.click()}
                     variant="outline"
                   >
-                    Browse files
-                    <span className="flex size-8 items-center justify-center rounded-full bg-foreground/5 transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105 dark:bg-white/10">
+                    Browse file
+                    <span className="flex size-8 items-center justify-center rounded-full transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105">
                       <ArrowRightIcon weight="light" />
                     </span>
                   </Button>
@@ -221,7 +227,7 @@ export function DocumentView() {
                 type="submit"
               >
                 <span className="flex-1 text-start">{state.phase === "fetching" ? "Fetching…" : "Analyse URL"}</span>
-                <span className="flex size-8 items-center justify-center rounded-full bg-primary-foreground/15 transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:scale-105">
+                <span className="flex size-8 items-center justify-center rounded-full transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:scale-105">
                   <ArrowRightIcon weight="light" />
                 </span>
               </Button>
