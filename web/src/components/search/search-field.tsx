@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Kbd } from "@/components/ui/kbd";
@@ -21,6 +22,17 @@ export function SearchField({
   autoFocus?: boolean;
   className?: string;
 }) {
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        input.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
   const hero = size === "hero";
   return (
     <form
@@ -41,6 +53,8 @@ export function SearchField({
           <MagnifyingGlassIcon className={cn(hero && "size-5!")} weight="light" />
         </InputGroupAddon>
         <InputGroupInput
+          ref={input}
+          aria-keyshortcuts="Meta+K Control+K"
           aria-label="Search titles, authors, ISBNs or Gutenberg IDs"
           autoComplete="off"
           autoFocus={autoFocus}
@@ -52,7 +66,8 @@ export function SearchField({
           value={value}
         />
         <InputGroupAddon align="inline-end" className={cn("max-sm:hidden", hero && "pe-5")}>
-          <Kbd>Enter</Kbd>
+          <Kbd title="⌘K on Mac · Ctrl+K on Windows/Linux">⌘/Ctrl K</Kbd>
+          <Kbd>↵</Kbd>
         </InputGroupAddon>
       </InputGroup>
     </form>

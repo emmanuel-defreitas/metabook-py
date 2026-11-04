@@ -129,8 +129,8 @@ export function DropZone() {
               onClick={() => input.current?.click()}
               variant="outline"
             >
-              Browse files
-              <span className="flex size-8 items-center justify-center rounded-full bg-foreground/5 transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105 dark:bg-white/10">
+              Browse file
+              <span className="flex size-8 items-center justify-center rounded-full transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105">
                 <ArrowUpRightIcon weight="light" />
               </span>
             </Button>
