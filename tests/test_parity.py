@@ -104,6 +104,12 @@ EDGE_CASES = [
         "text/html",
         b"<p>Loose <a href='#'>link</a>.</p><blockquote>Bare quote text. Two.</blockquote>",
     ),
+    # PR #91 review fixes
+    ("text/markdown", b"> Quoted text.\n# Next section\n\nBody text."),
+    ("text/markdown", b"> Quoted start\ncontinues lazily.\n> - list\n- unquoted list"),
+    ("text/markdown", b"    - not a list\n    - still code\n\n- real list\n      - deep"),
+    ("text/markdown", b"# [Title](https://example.org)\n\n[T](u) <http://a.b>\n===\n"),
+    ("text/plain", b"1. See https://example.org/spec\n\nTITLE HTTPS://X.Y\n\nT http://a.b\n---"),
 ]
 
 

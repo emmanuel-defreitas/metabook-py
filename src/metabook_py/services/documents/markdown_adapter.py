@@ -154,13 +154,15 @@ def parse_lines(lines: list[str]) -> list[Block]:
 
         if atx := _ATX.match(line):
             flush()
-            blocks.append(heading(len(atx.group(1)), strip_inline(atx.group(2) or "")))
+            raw = atx.group(2) or ""
+            blocks.append(heading(len(atx.group(1)), strip_inline(raw)).add_links(count_links(raw)))
             i += 1
             continue
 
         if para and (setext := _SETEXT.match(line)):
             level = 1 if setext.group(1).startswith("=") else 2
-            blocks.append(heading(level, strip_inline(" ".join(para))))
+            raw = " ".join(para)
+            blocks.append(heading(level, strip_inline(raw)).add_links(count_links(raw)))
             para.clear()
             i += 1
             continue
@@ -173,7 +175,13 @@ def parse_lines(lines: list[str]) -> list[Block]:
         if _QUOTE.match(line):
             flush()
             inner: list[str] = []
-            while i < n and lines[i].strip() and (_QUOTE.match(lines[i]) or inner):
+            # Lazy continuation: an unquoted line continues the quote only if it
+            # is paragraph text — a heading, fence, list or rule ends it.
+            while (
+                i < n
+                and lines[i].strip()
+                and (_QUOTE.match(lines[i]) or (inner and not _starts_block(lines[i])))
+            ):
                 inner.append(_QUOTE.sub("", lines[i], count=1))
                 i += 1
             blocks.append(Block(BlockType.BLOCKQUOTE, children=parse_lines(inner)))
@@ -202,17 +210,19 @@ def parse_lines(lines: list[str]) -> list[Block]:
             blocks.append(Block(BlockType.TABLE).add_links(links))
             continue
 
+        # Indented code wins over a list marker at a block start ("    - x" is
+        # code); it cannot interrupt a paragraph.
+        if not para and _INDENTED.match(line):
+            while i < n and (_INDENTED.match(lines[i]) or not lines[i].strip()):
+                i += 1
+            blocks.append(Block(BlockType.CODE_BLOCK))
+            continue
+
         if _LIST.match(line) and _LIST.match(line).group(3):  # type: ignore[union-attr]
             flush()
             end = _list_item_lines(lines, i)
             blocks.append(_parse_list(lines[i:end]))
             i = end
-            continue
-
-        if not para and _INDENTED.match(line):
-            while i < n and (_INDENTED.match(lines[i]) or not lines[i].strip()):
-                i += 1
-            blocks.append(Block(BlockType.CODE_BLOCK))
             continue
 
         if not para and _IMAGE_LINE.match(line):

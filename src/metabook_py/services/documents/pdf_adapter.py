@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from io import BytesIO
 
 from metabook_py.core.exceptions import InvalidDocumentError
-from metabook_py.services.documents.blocks import Block, heading
+from metabook_py.services.documents.blocks import BARE_URL, Block, heading
 from metabook_py.services.documents.text_adapter import classify_chunk
 
 _HEADING_RATIO = 1.15
@@ -156,9 +156,11 @@ def parse_pdf(data: bytes) -> tuple[list[Block], int]:
                 and blocks
             ):
                 blocks[-1].text = f"{blocks[-1].text} {ln.text}"
+                blocks[-1].add_links(len(BARE_URL.findall(ln.text)))
             else:
                 flush()
-                blocks.append(heading(level_of[_round(ln.size)], ln.text))
+                level = level_of[_round(ln.size)]
+                blocks.append(heading(level, ln.text).add_links(len(BARE_URL.findall(ln.text))))
         else:
             new_para = prev is None or is_heading(prev)
             if prev is not None and not new_para:

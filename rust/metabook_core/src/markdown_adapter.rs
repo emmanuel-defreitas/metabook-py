@@ -244,7 +244,9 @@ pub fn parse_lines(lines: &[String]) -> Vec<Block> {
         if let Some(atx) = ATX.captures(line) {
             flush(&mut para, &mut blocks);
             let text = atx.get(2).map_or("", |g| g.as_str());
-            blocks.push(heading(atx[1].len() as i64, strip_inline(text)));
+            blocks.push(
+                heading(atx[1].len() as i64, strip_inline(text)).add_links(count_links(text)),
+            );
             i += 1;
             continue;
         }
@@ -253,7 +255,8 @@ pub fn parse_lines(lines: &[String]) -> Vec<Block> {
             && let Some(setext) = SETEXT.captures(line)
         {
             let level = if setext[1].starts_with('=') { 1 } else { 2 };
-            blocks.push(heading(level, strip_inline(&para.join(" "))));
+            let raw = para.join(" ");
+            blocks.push(heading(level, strip_inline(&raw)).add_links(count_links(&raw)));
             para.clear();
             i += 1;
             continue;
@@ -268,7 +271,12 @@ pub fn parse_lines(lines: &[String]) -> Vec<Block> {
         if QUOTE.is_match(line) {
             flush(&mut para, &mut blocks);
             let mut inner: Vec<String> = Vec::new();
-            while i < n && !blank(&lines[i]) && (QUOTE.is_match(&lines[i]) || !inner.is_empty()) {
+            // Lazy continuation: an unquoted line continues the quote only if it
+            // is paragraph text — a heading, fence, list or rule ends it.
+            while i < n
+                && !blank(&lines[i])
+                && (QUOTE.is_match(&lines[i]) || (!inner.is_empty() && !starts_block(&lines[i])))
+            {
                 inner.push(QUOTE.replace(&lines[i], "").into_owned());
                 i += 1;
             }
@@ -310,6 +318,16 @@ pub fn parse_lines(lines: &[String]) -> Vec<Block> {
             continue;
         }
 
+        // Indented code wins over a list marker at a block start ("    - x" is
+        // code); it cannot interrupt a paragraph.
+        if para.is_empty() && INDENTED.is_match(line) {
+            while i < n && (INDENTED.is_match(&lines[i]) || blank(&lines[i])) {
+                i += 1;
+            }
+            blocks.push(Block::new(BlockType::CodeBlock));
+            continue;
+        }
+
         if LIST
             .captures(line)
             .is_some_and(|m| m.get(3).is_some_and(|g| !g.as_str().is_empty()))
@@ -318,14 +336,6 @@ pub fn parse_lines(lines: &[String]) -> Vec<Block> {
             let end = list_end(lines, i);
             blocks.push(parse_list(&lines[i..end]));
             i = end;
-            continue;
-        }
-
-        if para.is_empty() && INDENTED.is_match(line) {
-            while i < n && (INDENTED.is_match(&lines[i]) || blank(&lines[i])) {
-                i += 1;
-            }
-            blocks.push(Block::new(BlockType::CodeBlock));
             continue;
         }
 
