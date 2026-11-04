@@ -42,7 +42,17 @@ export interface StructureSummary {
 /** Any node in the tree; shape depends on its depth and the schema. */
 export type StructureNode = Record<string, unknown>;
 
+export interface MatterRegion {
+  position: "front" | "back";
+  kind: string;
+  evidence: string;
+  start: number;
+  end: number;
+  word_count: number;
+}
+
 export interface StructureDetail {
+  matter?: MatterRegion[] | null;
   schema: string;
   schema_confidence: string;
   schema_score: number;

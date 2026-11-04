@@ -166,11 +166,11 @@ export async function openSaved(id: string, signal?: AbortSignal): Promise<Analy
   );
 }
 
-export async function analyseGutenberg(id: number, signal?: AbortSignal): Promise<Analysis> {
+export async function analyseGutenberg(id: number, signal?: AbortSignal, detail: string = SCAN_DETAIL): Promise<Analysis> {
   const params = new URLSearchParams({
     gutenberg_id: String(id),
     include_paragraphs: "true",
-    detail: SCAN_DETAIL,
+    detail,
     tokenizer: SCAN_TOKENIZER,
     language: "",
   });
@@ -180,6 +180,7 @@ export async function analyseGutenberg(id: number, signal?: AbortSignal): Promis
 export interface UploadProgress {
   loaded: number;
   total: number;
+  phase?: "uploading" | "processing";
 }
 
 /** Multipart upload over XHR, so the real request bytes can be reported. */
@@ -196,6 +197,7 @@ function uploadFile<T>(
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress({ loaded: event.loaded, total: event.total });
     };
+    xhr.upload.onload = () => onProgress({ loaded: file.size, total: file.size, phase: "processing" });
     xhr.onerror = () =>
       reject(new ApiError("Couldn't reach the API. Check your connection and try again.", 0));
     xhr.onabort = () => reject(new ApiError("Upload cancelled.", 0));
@@ -246,7 +248,12 @@ function validDocument(value: DocumentAnalysis): DocumentAnalysis {
   return value;
 }
 
+export const DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+
 export function uploadDocument(file: File, onProgress: (progress: UploadProgress) => void) {
+  if (file.size > DOCUMENT_MAX_BYTES) {
+    return { promise: Promise.reject(new ApiError("That file exceeds the 20 MB limit. Choose a smaller document.", 413)), abort: () => {} };
+  }
   return uploadFile<DocumentAnalysis>("/api/documents/analyze", file, onProgress, validDocument);
 }
 
