@@ -98,3 +98,36 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"\n[ \t]+\n", "\n\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return _strip_contents(text)
+
+
+def detect_matter(text: str) -> list[dict]:
+    """Counts only for explicit Gutenberg excluded regions.
+
+    Offsets refer to decoded, HTML-extracted text before cleanup, not file bytes.
+    Absence of markers is not proof that no publisher matter exists.
+    """
+    from metabook_py.services.textstats import count_words
+
+    # Replace CR one-for-one so matching handles CRLF and offsets stay in source coordinates.
+    matching_text = text.replace("\r", "\n")
+    start = _PG_START.search(matching_text)
+    end = _PG_END.search(matching_text, start.end() if start else 0)
+    regions = []
+    for position, bounds in [
+        ("front", (0, start.end()) if start else None),
+        ("back", (end.start(), len(text)) if end else None),
+    ]:
+        if bounds is None:
+            continue
+        a, b = bounds
+        regions.append(
+            {
+                "position": position,
+                "kind": "gutenberg_boilerplate",
+                "evidence": "Explicit Project Gutenberg boundary marker",
+                "start": a,
+                "end": b,
+                "word_count": count_words(text[a:b]),
+            }
+        )
+    return regions

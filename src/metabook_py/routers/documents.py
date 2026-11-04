@@ -10,6 +10,7 @@ Both call services/documents/service.py, as does the MCP tool analyze_document.
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from metabook_py.core.config import settings
 from metabook_py.core.exceptions import (
@@ -85,7 +86,9 @@ async def analyze_upload(
     # buffering arbitrarily large bodies.
     data = await file.read(settings.document_max_bytes + 1)
     try:
-        return analyze_document(data, content_type=file.content_type, filename=file.filename)
+        return await run_in_threadpool(
+            analyze_document, data, content_type=file.content_type, filename=file.filename
+        )
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc
 

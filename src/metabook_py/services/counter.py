@@ -47,7 +47,7 @@ from metabook_py.services.detector import (
     SchemaType,
 )
 from metabook_py.services.preprocessing import preprocess_text
-from metabook_py.services.textstats import count_words, split_sentences
+from metabook_py.services.textstats import _WORD, count_words, split_sentences
 
 # Detail levels for the depth of leaf nesting, shallow → deep.
 DETAIL_LEVELS = ("paragraph", "sentence", "clause", "word")
@@ -83,8 +83,11 @@ def _split_paragraphs(text: str) -> list[str]:
 _CLAUSE_BOUNDARY = re.compile(r"[,;:]|—|–|--")
 
 
-def _word_nodes(text: str) -> list[WordNode]:
-    return [WordNode(index=i + 1) for i in range(_count_words(text))]
+def _word_nodes(text: str, encoder: Encoder | None = None) -> list[WordNode]:
+    return [
+        WordNode(index=i + 1, token_count=encoder(match.group()) if encoder else None)
+        for i, match in enumerate(_WORD.finditer(text))
+    ]
 
 
 def _clause_nodes(
@@ -96,7 +99,7 @@ def _clause_nodes(
             index=i + 1,
             word_count=_count_words(c),
             token_count=encoder(c) if encoder else None,
-            words=_word_nodes(c) if detail == "word" else None,
+            words=_word_nodes(c, encoder) if detail == "word" else None,
         )
         for i, c in enumerate(clauses)
     ]

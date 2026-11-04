@@ -42,8 +42,12 @@ class _OmitAbsentTokenFields(BaseModel):
 # A word node is purely positional.
 
 
-class WordNode(BaseModel):
+class WordNode(_OmitAbsentTokenFields):
     index: int
+    token_count: int | None = Field(
+        default=None,
+        description="Tokens encoding this word in isolation; excludes punctuation and need not sum to parent totals",
+    )
 
 
 class ClauseNode(_OmitAbsentTokenFields):
@@ -133,6 +137,10 @@ class TokenizerInfo(BaseModel):
 
 
 class StructureDetail(BaseModel):
+    matter: list[dict] | None = Field(
+        default=None,
+        description="Explicitly identified excluded front/back matter; null means unavailable in this scan",
+    )
     schema_type: str = Field(alias="schema")
     schema_confidence: str  # "high" | "medium" | "low"
     schema_score: float = Field(
