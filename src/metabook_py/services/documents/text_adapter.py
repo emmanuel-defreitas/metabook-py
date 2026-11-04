@@ -102,7 +102,8 @@ def classify_chunk(lines: list[str], *, allow_headings: bool = True) -> list[Blo
     if allow_headings and len(lines) >= 2 and _SETEXT.match(lines[1]) and lines[0].strip():
         setext_level = 1 if lines[1].strip().startswith("=") else 2
         rest = classify_chunk(lines[2:], allow_headings=allow_headings) if lines[2:] else []
-        return [heading(setext_level, lines[0].strip()), *rest]
+        title = lines[0].strip()
+        return [heading(setext_level, title).add_links(len(BARE_URL.findall(title))), *rest]
 
     first = lines[0]
     if all(_QUOTE.match(line) for line in lines):
@@ -122,7 +123,7 @@ def classify_chunk(lines: list[str], *, allow_headings: bool = True) -> list[Blo
     if allow_headings and len(lines) == 1:
         level = _heading_level(first)
         if level is not None:
-            return [heading(level, first.strip())]
+            return [heading(level, first.strip()).add_links(len(BARE_URL.findall(first)))]
     return [_paragraph(lines)]
 
 

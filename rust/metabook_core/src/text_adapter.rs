@@ -152,7 +152,8 @@ pub fn classify_chunk(lines: &[String], allow_headings: bool) -> Vec<Block> {
         } else {
             2
         };
-        let mut out = vec![heading(level, pystr::strip(&lines[0]))];
+        let title = pystr::strip(&lines[0]);
+        let mut out = vec![heading(level, title).add_links(count_urls(title))];
         if lines.len() > 2 {
             out.extend(classify_chunk(&lines[2..], allow_headings));
         }
@@ -190,7 +191,7 @@ pub fn classify_chunk(lines: &[String], allow_headings: bool) -> Vec<Block> {
         && lines.len() == 1
         && let Some(level) = heading_level(first)
     {
-        return vec![heading(level, pystr::strip(first))];
+        return vec![heading(level, pystr::strip(first)).add_links(count_urls(first))];
     }
     vec![paragraph(lines, BlockType::Paragraph)]
 }

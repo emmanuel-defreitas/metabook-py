@@ -637,3 +637,63 @@ async def test_mcp_errors():
         document_base64=base64.b64encode(b"x").decode(), content_type="image/png"
     )
     assert unsupported["status"] == 415
+
+
+# ── Review fixes (PR #91) ──────────────────────────────────────────────────────
+
+
+def test_markdown_blockquote_ends_at_unquoted_heading():
+    md = b"> Quoted text.\n# Next section\n\nBody text."
+    result = analyze_document(md, content_type="text/markdown")
+    assert _outline(result.structure.sections) == [("preamble", 0, "0"), ("section", 1, "1")]
+    section = result.structure.sections[1]
+    assert (section.counts.headings, section.counts.paragraphs) == (1, 1)
+    assert result.structure.totals.blockquotes == 1
+
+
+def test_markdown_lazy_quote_continuation_still_joins_paragraph_text():
+    totals = analyze_document(
+        b"> Quoted start\ncontinues lazily.", content_type="text/markdown"
+    ).structure.totals
+    assert (totals.blockquotes, totals.paragraphs, totals.sentences) == (1, 1, 1)
+
+
+def test_markdown_indented_list_marker_is_code():
+    totals = analyze_document(
+        b"    - not a list\n    - still code", content_type="text/markdown"
+    ).structure.totals
+    assert (totals.code_blocks, totals.lists, totals.list_items, totals.words) == (1, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("ctype", "body"),
+    [
+        ("text/markdown", b"# [Title](https://example.org)\n\nText."),
+        ("text/markdown", b"[Title](https://example.org)\n===\n\nText."),
+        ("text/plain", b"1. See https://example.org/spec\n\nText."),
+    ],
+)
+def test_heading_links_are_counted(ctype, body):
+    totals = analyze_document(body, content_type=ctype).structure.totals
+    assert (totals.headings, totals.links) == (1, 1)
+
+
+@respx.mock
+async def test_analyze_url_uses_final_url_for_extension(client, public_dns):
+    start = "https://docs.example.com/latest"
+    respx.get(start).mock(
+        return_value=httpx.Response(302, headers={"location": "/files/paper.pdf"})
+    )
+    respx.get("https://docs.example.com/files/paper.pdf").mock(
+        return_value=httpx.Response(
+            200,
+            content=(FIXTURES / "paper.pdf").read_bytes(),
+            headers={"content-type": "application/octet-stream"},
+        )
+    )
+    resp = await client.post("/api/documents/analyze-url", json={"url": start})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["document"]["format"] == "pdf"
+    assert body["document"]["source_url"] == start
+    assert body["structure"]["totals"] == EXPECTED["paper.pdf"]
