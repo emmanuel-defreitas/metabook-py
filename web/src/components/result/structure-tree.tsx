@@ -10,6 +10,8 @@ import type { StructureDetail } from "@/lib/api/types";
 import { childNodes, leafName, rootNodes, type TreeNode } from "@/lib/structure";
 import { cn } from "@/lib/utils";
 
+const ROOT_CHUNK = 100;
+
 function WordBlock({ index, seed, tokens, onSelect }: { index: number; seed: string; tokens?: number; onSelect?: () => void }) {
   // Stable pseudo-random widths simulate words without implying original text length.
   const hash = Array.from(seed).reduce((value, char) => Math.imul(value ^ char.charCodeAt(0), 16777619), 2166136261) >>> 0;
@@ -66,8 +68,11 @@ export function StructureTree({ structure, selectedId, onSelect }: {
   const roots = rootNodes(structure);
   const active = roots.find(node => node.id === selectedId?.split(".")[0]) ?? roots[0];
   const [limit, setLimit] = useState(12);
+  const [rootLimit, setRootLimit] = useState(ROOT_CHUNK);
   const reduce = useReducedMotion();
   if (!active) return <p className="p-4 text-sm text-muted-foreground">This result has no structural nodes.</p>;
+  // Flat books make every paragraph a root, so mount roots in chunks (keeping the active one visible).
+  const rootsShown = Math.max(rootLimit, roots.indexOf(active) + 1);
   const children = childNodes(active, leafName(structure));
   const selectedIndex = selectedId ? children.findIndex(node => selectedId === node.id || selectedId.startsWith(`${node.id}.`)) : -1;
   const shown = Math.max(limit, selectedIndex + 1);
@@ -76,7 +81,10 @@ export function StructureTree({ structure, selectedId, onSelect }: {
       <SidebarHeader className="flex-row items-center justify-between px-5 py-5"><span className="flex items-center gap-2 text-sm font-medium"><TreeStructureIcon weight="light" size={18} /> Outline</span><span className="font-mono text-xs text-muted-foreground">{roots.length}</span></SidebarHeader>
       <div className="flex h-52 min-h-0 flex-col md:h-[44rem]">
         <SidebarContent className="px-2 pb-4">
-          <nav aria-label="Book outline"><SidebarMenu>{roots.map(node => <OutlineBranch key={node.id} node={node} leaf={leafName(structure)} selectedId={selectedId ?? active.id} onSelect={id => {setLimit(12);onSelect(id);}} />)}</SidebarMenu></nav>
+          <nav aria-label="Book outline"><SidebarMenu>
+            {roots.slice(0, rootsShown).map(node => <OutlineBranch key={node.id} node={node} leaf={leafName(structure)} selectedId={selectedId ?? active.id} onSelect={id => {setLimit(12);onSelect(id);}} />)}
+            {roots.length > rootsShown && <SidebarMenuItem><SidebarMenuButton type="button" className="text-xs text-primary" onClick={() => setRootLimit(rootsShown + ROOT_CHUNK)}>Show {Math.min(ROOT_CHUNK, roots.length - rootsShown).toLocaleString()} more of {roots.length.toLocaleString()}</SidebarMenuButton></SidebarMenuItem>}
+          </SidebarMenu></nav>
         </SidebarContent>
       </div>
     </Sidebar>
