@@ -65,7 +65,7 @@ export function SearchField({
           type="search"
           value={value}
         />
-        <InputGroupAddon align="inline-end" className={cn("max-sm:hidden", hero && "pe-5")}>
+        <InputGroupAddon align="inline-end" className={cn("shrink-0 whitespace-nowrap max-sm:hidden [&>kbd]:shrink-0", hero && "pe-5")}>
           <Kbd title="⌘K on Mac · Ctrl+K on Windows/Linux">⌘/Ctrl K</Kbd>
           <Kbd>↵</Kbd>
         </InputGroupAddon>
