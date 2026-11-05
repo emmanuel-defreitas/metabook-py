@@ -38,7 +38,7 @@ your .epub ──► Vercel Blob ──► package doc + spine XHTML ───�
 
 - **🔍 Fuzzy search** — find books by title or author via Gutendex, or go straight to an ISBN / Gutenberg ID
 - **🧬 Schema detection** — classifies each book as `scripture`, `sectioned_book`, `standard_book`, `essay_collection`, or `flat`, with a confidence rating
-- **🔢 Counts, not content** — chapters, paragraphs, sentences, clauses, and words per node; a word node is just its index. **No book text is ever included in a response**
+- **🔢 Counts, not content** — chapters, paragraphs, sentences, clauses, and words per node; a word node is just its index. **Main-content text is never included in node responses**. Explicitly excluded Gutenberg front/back matter may include its original text
 - **📤 Bring your own EPUB** — `POST /api/books/upload` stores the file in Vercel Blob and analyses it with the same pipeline
 - **📄 Single documents** — analyse one paper or page (HTML, Markdown, PDF, plain text) into a section tree with counts per section ([schema](docs/single-document-schema.md))
 - **🔌 Two interfaces, one service layer** — a FastAPI REST API and a FastMCP server share the same core
@@ -151,7 +151,8 @@ explicit `schema:numberOfPages` EPUB metadata are stored when supplied; unknown
 values remain null. `metadata.LicenseId` is the license relationship.
 
 Metadata, relationships, and the structural JSON commit in one transaction.
-The database does not store extracted source prose. Uploaded EPUB files remain
+The database does not store extracted main-content prose. Structural JSON may retain
+publication text outside explicit Gutenberg boundaries. Uploaded EPUB files remain
 in the existing private Vercel Blob store. A failed PostgreSQL write returns 503
 instead of reporting a successful save. A successful response includes `record_id`;
 `GET /api/books/uploads/{record_id}/structure` reopens its committed result.
@@ -163,21 +164,31 @@ Real database tests use an isolated temporary schema and remove it afterward:
 TEST_DATABASE_URL='postgres://...' uv run pytest tests/test_postgres.py -m integration
 ```
 
-### Legacy uploads collection (MongoDB, optional)
+### Browser libraries (MongoDB Atlas)
 
-Every book a user uploads or selects from search results is persisted as a
-document in a MongoDB `uploads` collection: the book metadata, format
-(`epub`), the Vercel Blob link, and the scan state (scanned yet, last
-scanned, scope, schema, total token count). The structure tree itself is
-never stored. Set `MONGODB_URI` to enable (empty = disabled, no behavior
-change). `DATABASE_URL` takes precedence when both are configured. Re-selecting the same Gutenberg book updates its document instead
-of duplicating it:
+Vercel's existing `atlas-metabook` integration provides `MONGODB_URI`.
+MongoDB takes precedence over `DATABASE_URL`; `MONGODB_DB` defaults to `metabook`.
+The browser creates a UUID v4 in localStorage under `metabook.user-id` on first
+visit, reuses it on later visits, and sends it as `X-Metabook-User-ID` to the API.
+This is an anonymous library identifier, not account authentication. Clearing
+browser storage loses the identifier; another browser has a separate library.
+If localStorage is blocked, the identity lasts only for the page session.
 
-```bash
-export MONGODB_URI=mongodb://localhost:27017
-```
+`user_library` stores each owner's book/document metadata, authors, subjects
+(tags), Open Library enrichment and schema/scan summary. Complete parsed results
+are JSON files in the `parsed_results` GridFS bucket, supporting trees beyond
+MongoDB's 16 MB document limit. Every list and read filters by owner UUID.
+Gutenberg rescans replace that owner's library entry; previous GridFS versions
+remain available to concurrent readers. File and URL analyses get new entries.
+Responses are private and not cacheable. Missing UUIDs cannot access Mongo
+library records; invalid UUIDs are rejected. Database failures are reported,
+not silently presented as successful saves.
 
-Browse what's stored via `GET /api/books/uploads`.
+`GET /api/books/uploads` lists both books and documents; the existing
+`/api/books/uploads/{id}/structure` route reopens either complete result. Legacy
+ownerless MongoDB/PostgreSQL records remain untouched and aren't automatically
+assigned to a browser. The PostgreSQL adapter remains available for non-browser
+clients when MongoDB isn't configured. Browser clients require MongoDB.
 
 ### Single documents
 
@@ -285,7 +296,7 @@ returns (zero counts omitted here for brevity; the API returns every field):
 | `GET`  | `/api/books/search`                 | Browse Gutendex metadata by `q` (title/author), `isbn`, or `gutenberg_id`; supports `page` and optional `language` |
 | `GET`  | `/api/books/structure/schemas`      | List the supported structural schemas                                                                              |
 | `POST` | `/api/books/upload`                 | Upload an EPUB and analyse it                                                                                      |
-| `GET`  | `/api/books/uploads`                | List saved books (`DATABASE_URL` or legacy `MONGODB_URI`)                                                          |
+| `GET`  | `/api/books/uploads`                | List saved books (owner-scoped `MONGODB_URI`)                                                          |
 | `GET`  | `/api/books/uploads/{id}/structure` | Reopen a saved PostgreSQL scan                                                                                     |
 | `POST` | `/api/documents/analyze`            | Analyse one uploaded document (multipart `file`)                                                                   |
 | `POST` | `/api/documents/analyze-url`        | Fetch a public URL (`{"url": …}`) and analyse it                                                                   |
@@ -511,3 +522,24 @@ quoted spans represented only by positions, and sentence-length distributions.
 The `/health` response and OpenAPI `info.version` report the installed package
 version (or `pyproject.toml` for source-only deployments), so release verification
 can compare the running API with the PyPI release.
+
+### Uploaded EPUB catalog enrichment
+
+New EPUB uploads perform a best-effort Open Library lookup using the existing
+async Python HTTP client. A valid ISBN matches an edition; otherwise an
+unambiguous normalized title and author match identifies a work. Edition matches
+fill missing publisher, publication date and page count without replacing EPUB
+values. Work matches never supply edition-specific facts. Covers, catalog IDs,
+subjects and Dewey/Library of Congress classifications are saved under
+`book.open_library`, with the match method and retrieval timestamp, and displayed
+in the library and metadata view. Catalog metadata never changes parsed nodes,
+structure, schema selection or confidence. Existing saved uploads are not backfilled.
+
+Requests are cached for 24 hours (up to 512 lookup entries), limited to one request
+per second per API process, and bounded by `OPEN_LIBRARY_TIMEOUT` (default 5 seconds,
+including queue time). Failed, missing or ambiguous matches leave the upload intact.
+Set `OPEN_LIBRARY_ENABLED=false` to disable external enrichment, or configure
+`OPEN_LIBRARY_USER_AGENT` with your application name and contact information.
+Only the ISBN or title and first author is sent; book contents are not sent.
+For multi-worker deployments, coordinate the request limit across workers before
+increasing traffic. See [Open Library API guidelines](https://openlibrary.org/developers/api).

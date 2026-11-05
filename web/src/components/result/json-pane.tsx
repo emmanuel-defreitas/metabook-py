@@ -64,7 +64,7 @@ export function JsonPane({ analysis, selectedId, fullResult }: { analysis: Analy
               <DialogHeader>
                 <DialogTitle>Full JSON</DialogTitle>
                 <DialogDescription>
-                  The complete API result ({formatBytes(full.length)}). It holds positions and counts only.
+                  The complete API result ({formatBytes(full.length)}). Main-content nodes contain positions and counts only; excluded publication matter may include text.
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel>

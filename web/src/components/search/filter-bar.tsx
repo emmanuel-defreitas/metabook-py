@@ -68,19 +68,22 @@ function MultiFilter({
 
 /** Label-free Date / Category / Type multi-selects plus one Source select. */
 export function FilterBar({
+  libraryOnly = false,
   filters,
   categories,
   onChange,
   disabled,
   className,
 }: {
+  libraryOnly?: boolean;
   filters: SearchFilters;
   categories: Option[];
   onChange: (filters: SearchFilters) => void;
   disabled?: boolean;
   className?: string;
 }) {
-  const sourceItems = Object.fromEntries(SOURCE_OPTIONS.map((o) => [o.value, o.label]));
+  const sources = libraryOnly ? [{ value: "", label: "All sources" }, ...SOURCE_OPTIONS] : SOURCE_OPTIONS;
+  const sourceItems = Object.fromEntries(sources.map((o) => [o.value, o.label]));
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
       <MultiFilter
@@ -117,7 +120,7 @@ export function FilterBar({
           <SelectValue />
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
-          {SOURCE_OPTIONS.map((option) => (
+          {sources.map((option) => (
             <SelectItem disabled={option.disabled} key={option.value} value={option.value}>
               <span className="flex flex-col">
                 <span>{option.label}</span>

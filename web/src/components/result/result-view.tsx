@@ -7,9 +7,8 @@ import { MatterPanel } from "./matter-panel";
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { analyseGutenberg } from "@/lib/api/client";
-import { Button } from "@/components/ui/button";
 import { SchemaScore } from "@/components/library/score";
 import { Reveal } from "@/components/motion/reveal";
 import { Badge } from "@/components/ui/badge";
@@ -19,27 +18,16 @@ import { NodeExplorer } from "./node-explorer";
 import { MetadataSections } from "./metadata";
 
 export function ResultView({ analysis: initialAnalysis, record }: { analysis: Analysis; record?: UploadRecord }) {
-  const [updated, setUpdated] = useState<Analysis | null>(null);
-  const analysis = updated ?? initialAnalysis;
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
-  const queryClient = useQueryClient();
-  const refresh = async () => {
-    if (!analysis.book.gutenberg_id || refreshing) return;
-    setRefreshing(true);
-    setRefreshError(null);
-    try {
-      const result = await analyseGutenberg(analysis.book.gutenberg_id, undefined, "word");
-      setUpdated(result);
-      if (result.record_id) queryClient.setQueryData(["saved", result.record_id], result);
-      await queryClient.invalidateQueries({ queryKey: ["library"] });
-    } catch (error) {
-      setRefreshError(error instanceof Error ? error.message : "Could not refresh this scan.");
-    } finally {
-      setRefreshing(false);
-    }
-  };
   const [tab, setTab] = useState("metadata");
+  const matterScan = useQuery({
+    queryKey: ["matter-text", initialAnalysis.record_id, initialAnalysis.book.gutenberg_id],
+    queryFn: ({ signal }) => analyseGutenberg(initialAnalysis.book.gutenberg_id!, signal, "word"),
+    enabled: (tab === "front" || tab === "back") && !!initialAnalysis.book.gutenberg_id
+      && !!initialAnalysis.structure.matter?.some(region => region.text == null),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const analysis = matterScan.data ?? initialAnalysis;
   const reduce = useReducedMotion();
   const { book, structure } = analysis;
 
@@ -53,10 +41,10 @@ export function ResultView({ analysis: initialAnalysis, record }: { analysis: An
       className="book-page mx-auto flex w-full max-w-[1800px] flex-col gap-8 px-4 pt-10 pb-24 sm:px-8 lg:px-12 sm:pt-14"
     >
       <Reveal className="flex flex-col gap-6">
-        <div className="flex flex-wrap items-center gap-5">
+        <div className="flex flex-col items-start gap-4">
           <Link
             className="flex w-max items-center gap-2 rounded-lg px-1 text-muted-foreground text-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            href="/#library"
+            href="/library"
           >
             <ArrowLeftIcon weight="light" />
             Library
@@ -86,7 +74,7 @@ export function ResultView({ analysis: initialAnalysis, record }: { analysis: An
           </Tabs.List>
         </div>
         <div className="flex flex-wrap items-center gap-5 sm:gap-8">
-          <BookCover id={book.gutenberg_id} title={book.title} />
+          <BookCover coverId={book.open_library?.cover_id} id={book.gutenberg_id} title={book.title} />
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <div className="flex flex-wrap gap-1.5">
               <Badge variant="outline">{schemaLabel(structure.schema)}</Badge>
@@ -120,21 +108,8 @@ export function ResultView({ analysis: initialAnalysis, record }: { analysis: An
         </div>
       </Reveal>
 
-      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground" aria-live="polite">
-        {book.gutenberg_id ? (
-          <Button size="sm" variant="outline" loading={refreshing} onClick={refresh}>
-            Refresh word detail
-          </Button>
-        ) : null}
-        <span>
-          {refreshing ? "Scanning words, tokens and publication matter…" : "Token badges count each word in isolation."}
-        </span>
-        {refreshError && (
-          <p role="alert" className="text-destructive-foreground">
-            {refreshError}
-          </p>
-        )}
-      </div>
+      {matterScan.isFetching && <p role="status" className="text-sm text-muted-foreground">Retrieving excluded publication material…</p>}
+      {matterScan.isError && (tab === "front" || tab === "back") && <p role="alert" className="text-sm text-destructive-foreground">Could not retrieve publication text. {matterScan.error.message}</p>}
       <Tabs.Panel value="metadata">
         <motion.div
           initial={{ opacity: 0, y: reduce ? 0 : 8 }}

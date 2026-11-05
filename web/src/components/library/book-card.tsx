@@ -13,7 +13,7 @@ import { SchemaScore } from "./score";
 
 function Cover({ record }: { record: UploadRecord }) {
   const [failed, setFailed] = useState(false);
-  const url = record.gutenberg_id ? gutenbergCoverUrl(record.gutenberg_id) : null;
+  const url = record.gutenberg_id ? gutenbergCoverUrl(record.gutenberg_id) : record.book.open_library?.cover_id ? `https://covers.openlibrary.org/b/id/${record.book.open_library.cover_id}-L.jpg?default=false` : null;
   return (
     <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-secondary ring-1 ring-foreground/6">
       {url && !failed ? (
@@ -38,7 +38,7 @@ function Cover({ record }: { record: UploadRecord }) {
 
 export function BookCard({ record, now }: { record: UploadRecord; now: number }) {
   const size = record.size_bytes ?? record.blob?.size_bytes;
-  const source = record.source === "upload" ? "Upload" : "Gutendex";
+  const source = record.source === "gutenberg" ? "Gutendex" : record.kind === "document" ? record.format.toUpperCase() : "Upload";
   return (
     <Link
       className="group block rounded-xl bg-foreground/[0.03] p-1.5 outline-none ring-1 ring-foreground/6 transition-[scale,box-shadow] duration-500 ease-spring hover:shadow-[0_24px_48px_-28px_rgba(15,18,23,0.35)] focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99] dark:bg-white/[0.03]"

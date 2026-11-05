@@ -20,8 +20,10 @@ from metabook_py.core.exceptions import (
     UnsupportedDocumentTypeError,
     UrlNotAllowedError,
 )
+from metabook_py.core.identity import browser_user_id
 from metabook_py.models.document import AnalyzeUrlRequest, DocumentAnalysisResponse
 from metabook_py.services.documents.service import analyze_document, analyze_document_url
+from metabook_py.services.store import get_upload_store
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -87,9 +89,12 @@ async def analyze_upload(
     # buffering arbitrarily large bodies.
     data = await file.read(settings.document_max_bytes + 1)
     try:
-        return await run_in_threadpool(
+        result = await run_in_threadpool(
             analyze_document, data, content_type=file.content_type, filename=file.filename, detail=detail
         )
+        if browser_user_id.get():
+            result.record_id = await get_upload_store().record_document(result)
+        return result
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc
 
@@ -112,6 +117,9 @@ async def analyze_url(body: AnalyzeUrlRequest, detail: bool = False) -> Document
     **No text content is included in the response.**
     """
     try:
-        return await analyze_document_url(str(body.url), detail=detail)
+        result = await analyze_document_url(str(body.url), detail=detail)
+        if browser_user_id.get():
+            result.record_id = await get_upload_store().record_document(result)
+        return result
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc

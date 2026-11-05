@@ -101,7 +101,7 @@ def preprocess_text(text: str) -> str:
 
 
 def detect_matter(text: str) -> list[dict]:
-    """Counts only for explicit Gutenberg excluded regions.
+    """Text and counts only for explicit Gutenberg excluded regions.
 
     Offsets refer to decoded, HTML-extracted text before cleanup, not file bytes.
     Absence of markers is not proof that no publisher matter exists.
@@ -128,6 +128,7 @@ def detect_matter(text: str) -> list[dict]:
                 "start": a,
                 "end": b,
                 "word_count": count_words(text[a:b]),
+                "text": text[a:b],
             }
         )
     return regions

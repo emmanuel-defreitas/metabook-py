@@ -205,6 +205,13 @@ export function MetadataSections({ analysis, record }: { analysis: Analysis; rec
     ["License", text(book.license)],
     ["Publication date", text(book.date)],
     ["Pages", text(book.number_of_pages)],
+    ["Open Library", book.open_library ? <div className="space-y-2">
+      {[book.open_library.edition_id, book.open_library.work_id].filter(Boolean).map(id => <a key={id} className="mr-3 underline underline-offset-4" href={`https://openlibrary.org/${id!.endsWith("M") ? "books" : "works"}/${id}`} target="_blank" rel="noreferrer">{id}</a>)}
+      <p className="text-xs text-muted-foreground">{book.open_library.match_method === "isbn" ? "Edition matched by ISBN" : "Work matched by title and author; cover may represent another edition"}. Catalog metadata and cover from Open Library.</p>
+    </div> : null],
+    ["Catalog subjects", book.open_library?.subjects.length ? <div className="flex flex-wrap gap-1.5">{book.open_library.subjects.map(subject => <Badge key={subject} variant="secondary" className="h-auto whitespace-normal py-1">{subject}</Badge>)}</div> : null],
+    ["Dewey classification", book.open_library?.dewey_decimal.join(" · ")],
+    ["Library of Congress", book.open_library?.lc_classifications.join(" · ")],
   ];
 
   const storage: Row[] = [

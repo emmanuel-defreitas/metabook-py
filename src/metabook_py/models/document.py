@@ -82,6 +82,7 @@ class DocumentMeta(BaseModel):
 
 
 class DocumentAnalysisResponse(BaseModel):
+    record_id: str | None = None
     document: DocumentInfo
     structure: DocumentStructure
     meta: DocumentMeta

@@ -83,7 +83,7 @@ async def _rate_limited_get(url: str) -> str:
 
 
 class BookText(str):
-    """Cleaned text carrying counts for excluded source regions; never raw prose."""
+    """Cleaned body plus text and counts for explicitly excluded publication regions."""
 
     matter: list[dict]
 
@@ -112,7 +112,7 @@ async def fetch_book_text(
     ------
     TextUnavailableError — fetch failure OR empty text after cleaning
     """
-    cache_key = f"book_text:v3:{gutenberg_id}:{int(is_html)}"
+    cache_key = f"book_text:v4:{gutenberg_id}:{int(is_html)}"
 
     cached = await book_text_cache.get(cache_key)
     if cached is not None:

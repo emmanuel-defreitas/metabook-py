@@ -73,11 +73,11 @@ export function Recents({ filters, query }: { filters: SearchFilters; query: str
             <EmptyMedia variant="icon">
               <BooksIcon weight="light" />
             </EmptyMedia>
-            <EmptyTitle>{library.data?.length ? "No saved books match" : "No saved books yet"}</EmptyTitle>
+            <EmptyTitle>{library.data?.length ? "No saved items match" : "No saved items yet"}</EmptyTitle>
             <EmptyDescription>
               {library.data?.length
-                ? "Change the filters, or pick Upload as the source to see saved EPUBs."
-                : "Search the catalog and choose Schema, or drop an EPUB above."}
+                ? "Change the filters to see your saved books and documents."
+                : "Search the catalog and choose Schema, or upload a file from Home."}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

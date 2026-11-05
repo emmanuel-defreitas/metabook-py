@@ -47,7 +47,7 @@ export function ResultError({ message, onRetry }: { message: string; onRetry?: (
         </EmptyHeader>
         <EmptyContent>
           <div className="flex gap-2">
-            <Button className="rounded-lg" render={<Link href="/#library" />} variant="outline">
+            <Button className="rounded-lg" render={<Link href="/library" />} variant="outline">
               Return to library
             </Button>
             {onRetry && (

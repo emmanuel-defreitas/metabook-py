@@ -1,42 +1,39 @@
 "use client";
 
-import { ArrowRightIcon, FileArrowUpIcon, FileTextIcon, GlobeSimpleIcon } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { ArrowRightIcon, GlobeSimpleIcon } from "@phosphor-icons/react";
+import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { LIBRARY_KEY } from "@/hooks/use-library";
+import { useState } from "react";
 import { Reveal } from "@/components/motion/reveal";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Progress, ProgressIndicator, ProgressLabel, ProgressTrack, ProgressValue } from "@/components/ui/progress";
+import { DropZone } from "@/components/library/drop-zone";
 import { Spinner } from "@/components/ui/spinner";
 import {
   analyseDocumentUrl,
-  DOCUMENT_ACCEPT,
-  DOCUMENT_MAX_BYTES,
-  type UploadProgress,
-  uploadDocument,
 } from "@/lib/api/client";
 import type { DocumentAnalysis } from "@/lib/api/types";
 import { normalizeUrl } from "@/lib/document";
-import { formatBytes } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import { DocumentResult } from "./document-result";
 
 type State =
   | { phase: "idle" }
-  | { phase: "uploading"; name: string; progress: UploadProgress; abort: () => void }
   | { phase: "fetching"; url: string; abort: () => void }
   | { phase: "error"; source: string; message: string }
   | { phase: "done"; result: DocumentAnalysis };
 
-const FORMATS = ["HTML", "Markdown", "PDF", "Plain text"];
+const FORMATS = ["EPUB", "HTML", "Markdown", "PDF", "Plain text"];
 
 /** Upload a file or fetch a public URL, then explore its section outline. */
-export function DocumentView() {
-  const input = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
+export function DocumentView({ embedded = false }: { embedded?: boolean }) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const [url, setUrl] = useState("");
   const [state, setState] = useState<State>({ phase: "idle" });
-  const busy = state.phase === "uploading" || state.phase === "fetching";
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const busy = state.phase === "fetching" || uploadBusy;
 
   const fail = (source: string) => (error: Error) => {
     if (error.message === "Upload cancelled." || error.name === "AbortError") {
@@ -44,23 +41,6 @@ export function DocumentView() {
       return;
     }
     setState({ phase: "error", source, message: error.message });
-  };
-
-  const upload = (file: File | undefined) => {
-    if (!file || busy) return;
-    if (file.size > DOCUMENT_MAX_BYTES) {
-      setState({
-        phase: "error",
-        source: file.name,
-        message: "That file exceeds the 20 MB limit. Choose a smaller document.",
-      });
-      return;
-    }
-    const { promise, abort } = uploadDocument(file, (progress) =>
-      setState((current) => (current.phase === "uploading" ? { ...current, progress } : current)),
-    );
-    setState({ phase: "uploading", name: file.name, progress: { loaded: 0, total: file.size }, abort });
-    promise.then((result) => setState({ phase: "done", result })).catch(fail(file.name));
   };
 
   const fetchUrl = () => {
@@ -73,7 +53,13 @@ export function DocumentView() {
     const controller = new AbortController();
     setState({ phase: "fetching", url: target, abort: () => controller.abort() });
     analyseDocumentUrl(target, controller.signal)
-      .then((result) => setState({ phase: "done", result }))
+      .then((result) => {
+        queryClient.invalidateQueries({ queryKey: LIBRARY_KEY });
+        if (result.record_id) {
+          queryClient.setQueryData(["saved", result.record_id], result);
+          router.push(`/books/${result.record_id}`);
+        } else setState({ phase: "done", result });
+      })
       .catch(fail(target));
   };
 
@@ -82,17 +68,14 @@ export function DocumentView() {
     setUrl("");
   };
 
-  const uploading = state.phase === "uploading" ? state : null;
-  const sent = uploading && uploading.progress.phase === "processing";
-
   return (
-    <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-16 px-4 pt-16 pb-32 sm:px-8 sm:pt-24">
-      <Reveal className="flex max-w-3xl flex-col gap-6">
+    <div className={embedded ? "flex min-w-0 flex-col gap-8" : "mx-auto flex w-full max-w-[1800px] flex-col gap-16 px-4 pt-16 pb-32 sm:px-8 sm:pt-24"}>
+      {!embedded && <Reveal className="flex max-w-3xl flex-col gap-6">
         <span className="w-max rounded-lg bg-secondary px-3 py-1 font-medium text-[10px] text-muted-foreground uppercase tracking-[0.2em] ring-1 ring-foreground/6">
-          Single documents
+          Books & documents
         </span>
         <h1 className="text-balance font-semibold text-5xl leading-[1.02] tracking-[-0.035em] sm:text-6xl">
-          Outline any document.
+          Map a book or document.
         </h1>
         <p className="max-w-xl text-balance text-lg text-muted-foreground">
           Upload a file or point at a public page. Metabook nests its sections by heading level and counts paragraphs,
@@ -109,96 +92,14 @@ export function DocumentView() {
           ))}
           <span className="px-1 py-0.5 text-subtle-foreground text-xs">up to 20 MB</span>
         </div>
-      </Reveal>
+      </Reveal>}
 
       {state.phase === "done" ? (
         <DocumentResult onResetAction={reset} result={state.result} />
       ) : (
         <Reveal className="grid grid-cols-1 gap-6 lg:grid-cols-12" delay={0.08}>
-          <div className="rounded-xl bg-foreground/3 p-1.5 ring-1 ring-foreground/6 lg:col-span-7 dark:bg-white/3">
-            <div
-              className={cn(
-                "relative flex h-full flex-col items-center justify-center gap-5 rounded-xl border border-dashed border-foreground/12 bg-card px-6 py-10 text-center shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] transition-[background-color,border-color,scale] duration-500 ease-spring dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] sm:py-12",
-                dragging && "scale-[0.99] border-primary/60 bg-brand-subtle",
-              )}
-              onDragLeave={() => setDragging(false)}
-              onDragOver={(event) => {
-                event.preventDefault();
-                if (!busy) setDragging(true);
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                setDragging(false);
-                if (event.dataTransfer.files.length !== 1) {
-                  if (!busy)
-                    setState({ phase: "error", source: "these files", message: "Choose one document at a time." });
-                  return;
-                }
-                upload(event.dataTransfer.files[0]);
-              }}
-            >
-              <span className="flex size-14 items-center justify-center rounded-2xl bg-secondary ring-1 ring-foreground/6">
-                {uploading ? (
-                  <FileTextIcon className="size-7 text-primary" weight="light" />
-                ) : (
-                  <FileArrowUpIcon className="size-7 text-muted-foreground" weight="light" />
-                )}
-              </span>
-              {uploading ? (
-                <div aria-live="polite" className="flex w-full max-w-sm flex-col gap-3">
-                  <Progress max={uploading.progress.total || 1} value={sent ? null : uploading.progress.loaded}>
-                    <div className="flex items-center justify-between gap-2">
-                      <ProgressLabel className="truncate">
-                        {sent ? "Upload complete · Building the outline…" : `Uploading ${uploading.name}`}
-                      </ProgressLabel>
-                      {!sent && <ProgressValue />}
-                    </div>
-                    <ProgressTrack className="h-1.5 rounded-lg">
-                      <ProgressIndicator className={cn("rounded-lg", sent && "w-full! animate-pulse")} />
-                    </ProgressTrack>
-                  </Progress>
-                  <p className="text-subtle-foreground text-xs">
-                    {sent
-                      ? "Processing the document. You can cancel while waiting."
-                      : `${formatBytes(uploading.progress.loaded)} of ${formatBytes(uploading.progress.total)}`}
-                  </p>
-                  <Button className="self-center" onClick={uploading.abort} size="sm" variant="ghost">
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <div className="flex flex-col gap-1.5">
-                    <p className="font-medium text-lg tracking-tight">Drop a document</p>
-                    <p className="text-muted-foreground text-sm">
-                      HTML, Markdown, PDF or plain text. Nothing is saved.
-                    </p>
-                  </div>
-                  <Button
-                    className="group h-11 rounded-lg ps-5 pe-1.5 active:scale-[0.98]"
-                    disabled={busy}
-                    onClick={() => input.current?.click()}
-                    variant="outline"
-                  >
-                    Browse file
-                    <span className="flex size-8 items-center justify-center rounded-lg transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105">
-                      <ArrowRightIcon weight="light" />
-                    </span>
-                  </Button>
-                </>
-              )}
-              <input
-                accept={DOCUMENT_ACCEPT}
-                className="sr-only"
-                onChange={(event) => {
-                  upload(event.target.files?.[0]);
-                  event.target.value = "";
-                }}
-                ref={input}
-                tabIndex={-1}
-                type="file"
-              />
-            </div>
+          <div className="lg:col-span-7" inert={state.phase === "fetching"}>
+            <DropZone onBusyChange={setUploadBusy} onDocument={(result) => setState({ phase: "done", result })} />
           </div>
 
           <div className="rounded-xl bg-foreground/3 p-1.5 ring-1 ring-foreground/6 lg:col-span-5 dark:bg-white/3">
@@ -215,7 +116,7 @@ export function DocumentView() {
               <div className="flex flex-col gap-1.5">
                 <h2 className="font-medium text-lg tracking-tight">Or fetch a URL</h2>
                 <p className="text-muted-foreground text-sm">
-                  Public pages only. The API downloads it once, within 10 seconds, and keeps nothing.
+                  Public pages only. The API downloads it once, within 10 seconds. Parsed results are saved to your browser’s library.
                 </p>
               </div>
               <InputGroup className="mt-auto rounded-lg">

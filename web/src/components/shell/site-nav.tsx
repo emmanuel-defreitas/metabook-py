@@ -20,7 +20,7 @@ export function SiteNav() {
         <span aria-hidden className="mx-1 h-5 w-px bg-border" />
         <Link
           className="rounded-lg px-3 py-1.5 text-muted-foreground text-sm outline-none transition-colors duration-300 ease-spring hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          href="/#library"
+          href="/library"
         >
           Library
         </Link>
@@ -28,7 +28,7 @@ export function SiteNav() {
           className="rounded-lg px-3 py-1.5 text-muted-foreground text-sm outline-none transition-colors duration-300 ease-spring hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           href="/documents"
         >
-          Documents
+          Upload
         </Link>
         <ThemeToggle />
       </nav>

@@ -4,7 +4,7 @@ Version `1.0`. Applies to `POST /api/documents/analyze`, `POST /api/documents/an
 and the MCP tool `analyze_document`. All three call one service function and return the
 same JSON.
 
-Like the book endpoints, the response carries **counts and positions only, never text**:
+The single-document response carries **counts and positions only, never text**:
 no headings, no sentences, no link targets, no alt text. A test walks every response and
 fails if any string field outside the metadata allowlist (`filename`, `source_url`,
 `content_type`, `sha256`, `analyzed_at`) is longer than 64 characters.

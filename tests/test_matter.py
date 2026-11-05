@@ -12,12 +12,15 @@ from metabook_py.services.preprocessing import detect_matter, preprocess_text
 SOURCE = "Publisher header\n*** START OF THE PROJECT GUTENBERG EBOOK TEST ***\nChapter I\n\nAuthored body text.\n*** END OF THE PROJECT GUTENBERG EBOOK TEST ***\nLicense footer"
 
 
-def test_explicit_matter_is_separate_and_contains_no_prose():
+def test_explicit_matter_contains_only_excluded_text():
     regions = detect_matter(SOURCE)
     assert [item["position"] for item in regions] == ["front", "back"]
     assert regions[0]["end"] < regions[1]["start"]
     assert all(item["word_count"] > 0 for item in regions)
-    assert "Publisher header" not in str(regions)
+    assert "Publisher header" in regions[0]["text"]
+    assert "License footer" in regions[1]["text"]
+    assert all("Authored body text." not in item["text"] for item in regions)
+    assert all(item["text"] == SOURCE[item["start"]:item["end"]] for item in regions)
     body = preprocess_text(SOURCE)
     assert "Authored body text." in body
     assert "Publisher header" not in body
@@ -59,6 +62,20 @@ def test_words_have_individual_counts_only_when_requested():
 def test_crlf_matter_offsets_refer_to_original_source():
     source = SOURCE.replace("\n", "\r\n")
     regions = detect_matter(source)
+    assert all(item["text"] == source[item["start"]:item["end"]] for item in regions)
     assert len(regions) == 2
     assert source[regions[1]["start"]:].startswith("*** END OF")
     assert source[:regions[0]["end"]].endswith("***")
+
+
+@pytest.mark.parametrize("position", ["front", "back"])
+def test_one_sided_boundary_never_returns_the_body(position):
+    source = (
+        "Publisher header\n*** START OF THE PROJECT GUTENBERG EBOOK TEST ***\nPrivate body."
+        if position == "front" else
+        "Private body.\n*** END OF THE PROJECT GUTENBERG EBOOK TEST ***\nLicense footer"
+    )
+    regions = detect_matter(source)
+    assert len(regions) == 1
+    assert regions[0]["position"] == position
+    assert "Private body." not in regions[0]["text"]

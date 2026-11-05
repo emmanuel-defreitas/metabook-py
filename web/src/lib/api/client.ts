@@ -1,12 +1,13 @@
 // Browser client for the Book Structure API, served from the same origin
 // under /api (Vercel services in production, a Next.js rewrite in dev).
 
+import { browserUserId } from "@/lib/browser-user";
 import type { Analysis, CatalogPage, DocumentAnalysis, UploadRecord } from "./types";
 
 const BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "").replace(/\/$/, "");
 
 /** Scan settings shared with the desktop client. */
-export const SCAN_DETAIL = "sentence";
+export const SCAN_DETAIL = "word";
 export const SCAN_TOKENIZER = "bert-base-uncased";
 
 export class ApiError extends Error {
@@ -80,7 +81,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${BASE}${path}`, {
       ...init,
-      headers: { Accept: "application/json", ...init?.headers },
+      headers: { Accept: "application/json", "X-Metabook-User-ID": browserUserId(), ...init?.headers },
+      cache: "no-store",
     });
   } catch (error) {
     if (init?.signal?.aborted) throw error;
@@ -160,10 +162,9 @@ export function listLibrary(signal?: AbortSignal): Promise<UploadRecord[]> {
   return request<UploadRecord[]>("/api/books/uploads?limit=200", { signal });
 }
 
-export async function openSaved(id: string, signal?: AbortSignal): Promise<Analysis> {
-  return validAnalysis(
-    await request<Analysis>(`/api/books/uploads/${encodeURIComponent(id)}/structure`, { signal }),
-  );
+export async function openSaved(id: string, signal?: AbortSignal): Promise<Analysis | DocumentAnalysis> {
+  const result = await request<Analysis | DocumentAnalysis>(`/api/books/uploads/${encodeURIComponent(id)}/structure`, { signal });
+  return "document" in result ? validDocument(result) : validAnalysis(result);
 }
 
 export async function analyseGutenberg(id: number, signal?: AbortSignal, detail: string = SCAN_DETAIL): Promise<Analysis> {
@@ -194,6 +195,7 @@ function uploadFile<T>(
   const promise = new Promise<T>((resolve, reject) => {
     xhr.open("POST", `${BASE}${path}`);
     xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("X-Metabook-User-ID", browserUserId());
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress({ loaded: event.loaded, total: event.total });
     };
