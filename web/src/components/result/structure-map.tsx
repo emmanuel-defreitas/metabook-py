@@ -8,7 +8,7 @@ import type { Analysis } from "@/lib/api/types";
 import { childNodes, findNode, leafName, rootNodes, type TreeNode } from "@/lib/structure";
 import { cn } from "@/lib/utils";
 
-const PAGE = 12;
+const PAGE = 6;
 const SIZE = 560;
 const CENTER = SIZE / 2;
 const RADIUS = 200;
@@ -27,7 +27,7 @@ function short(label: string, max = 18) {
 }
 
 /**
- * Radial node map: the focused node in the middle, up to 12 children around it.
+ * Radial node map: the focused node in the middle, up to 6 children around it.
  * Click a child to select it; double-click (or "Open") to drill in.
  */
 export function StructureMap({
@@ -73,7 +73,7 @@ export function StructureMap({
         <div className="flex min-w-0 items-center gap-2">
           <Button
             aria-label="Up one level"
-            className="rounded-full"
+            className="rounded-lg"
             disabled={!focusId}
             onClick={() => onFocus(parentId)}
             size="icon-sm"
@@ -87,7 +87,7 @@ export function StructureMap({
                 <span className="text-foreground">{focus.label}</span> · {focus.meta}
               </>
             ) : (
-              "Whole book"
+              analysis.structure.schema === "document" ? "Whole document" : "Whole book"
             )}
           </p>
         </div>
@@ -95,7 +95,7 @@ export function StructureMap({
           <div className="flex items-center gap-1 text-muted-foreground text-xs tabular-nums">
             <Button
               aria-label="Previous nodes"
-              className="rounded-full"
+              className="rounded-lg"
               disabled={page === 0}
               onClick={() => setPageState({ focusId, page: page - 1 })}
               size="icon-sm"
@@ -106,7 +106,7 @@ export function StructureMap({
             {page * PAGE + 1}–{Math.min(children.length, (page + 1) * PAGE)} of {children.length.toLocaleString()}
             <Button
               aria-label="Next nodes"
-              className="rounded-full"
+              className="rounded-lg"
               disabled={page >= pages - 1}
               onClick={() => setPageState({ focusId, page: page + 1 })}
               size="icon-sm"
@@ -118,7 +118,7 @@ export function StructureMap({
         )}
       </div>
 
-      <div className="relative overflow-hidden rounded-[calc(1.75rem-0.375rem)] bg-[radial-gradient(circle_at_center,color-mix(in_oklab,var(--primary)_7%,transparent),transparent_65%)]">
+      <div className="relative overflow-hidden rounded-xl bg-[radial-gradient(circle_at_center,color-mix(in_oklab,var(--primary)_7%,transparent),transparent_65%)]">
         <svg
           aria-label="Structure map"
           className="mx-auto block aspect-square w-full max-w-[560px]"
@@ -157,11 +157,11 @@ export function StructureMap({
               <g>
                 <circle className="fill-card stroke-foreground/10" cx={CENTER} cy={CENTER} r={64} strokeWidth={1} />
                 <circle className="fill-none stroke-primary/25" cx={CENTER} cy={CENTER} r={72} strokeDasharray="2 6" />
-                <text className="fill-foreground font-semibold text-[13px]" textAnchor="middle" x={CENTER} y={CENTER - 2}>
-                  {short(centerLabel, 20)}
+                <text className="fill-foreground font-semibold text-[18px]" textAnchor="middle" x={CENTER} y={CENTER - 2}>
+                  {short(centerLabel, 14)}
                 </text>
-                <text className="fill-muted-foreground text-[10px]" textAnchor="middle" x={CENTER} y={CENTER + 16}>
-                  {short(centerMeta.split(" · ")[0] ?? "", 26)}
+                <text className="fill-muted-foreground text-[16px]" textAnchor="middle" x={CENTER} y={CENTER + 16}>
+                  {short(centerMeta.split(" · ")[0] ?? "", 18)}
                 </text>
               </g>
 
@@ -211,12 +211,12 @@ export function StructureMap({
                       />
                     )}
                     <text
-                      className={cn("text-[11px]", selected ? "fill-foreground font-medium" : "fill-muted-foreground")}
+                      className={cn("text-[18px]", selected ? "fill-foreground font-medium" : "fill-muted-foreground")}
                       textAnchor="middle"
                       x={x}
                       y={below ? y + r + 14 : y - r - 8}
                     >
-                      {short(node.label)}
+                      {short(node.label, 14)}
                     </text>
                   </g>
                 );

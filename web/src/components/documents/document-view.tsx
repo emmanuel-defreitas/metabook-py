@@ -6,15 +6,15 @@ import { Reveal } from "@/components/motion/reveal";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import {
-  Progress,
-  ProgressIndicator,
-  ProgressLabel,
-  ProgressTrack,
-  ProgressValue,
-} from "@/components/ui/progress";
+import { Progress, ProgressIndicator, ProgressLabel, ProgressTrack, ProgressValue } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { analyseDocumentUrl, DOCUMENT_ACCEPT, DOCUMENT_MAX_BYTES, type UploadProgress, uploadDocument } from "@/lib/api/client";
+import {
+  analyseDocumentUrl,
+  DOCUMENT_ACCEPT,
+  DOCUMENT_MAX_BYTES,
+  type UploadProgress,
+  uploadDocument,
+} from "@/lib/api/client";
 import type { DocumentAnalysis } from "@/lib/api/types";
 import { normalizeUrl } from "@/lib/document";
 import { formatBytes } from "@/lib/format";
@@ -49,7 +49,11 @@ export function DocumentView() {
   const upload = (file: File | undefined) => {
     if (!file || busy) return;
     if (file.size > DOCUMENT_MAX_BYTES) {
-      setState({ phase: "error", source: file.name, message: "That file exceeds the 20 MB limit. Choose a smaller document." });
+      setState({
+        phase: "error",
+        source: file.name,
+        message: "That file exceeds the 20 MB limit. Choose a smaller document.",
+      });
       return;
     }
     const { promise, abort } = uploadDocument(file, (progress) =>
@@ -82,21 +86,24 @@ export function DocumentView() {
   const sent = uploading && uploading.progress.phase === "processing";
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-16 px-4 pt-16 pb-32 sm:px-8 sm:pt-24">
+    <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-16 px-4 pt-16 pb-32 sm:px-8 sm:pt-24">
       <Reveal className="flex max-w-3xl flex-col gap-6">
-        <span className="w-max rounded-full bg-secondary px-3 py-1 font-medium text-[10px] text-muted-foreground uppercase tracking-[0.2em] ring-1 ring-foreground/6">
+        <span className="w-max rounded-lg bg-secondary px-3 py-1 font-medium text-[10px] text-muted-foreground uppercase tracking-[0.2em] ring-1 ring-foreground/6">
           Single documents
         </span>
         <h1 className="text-balance font-semibold text-5xl leading-[1.02] tracking-[-0.035em] sm:text-6xl">
           Outline any document.
         </h1>
         <p className="max-w-xl text-balance text-lg text-muted-foreground">
-          Upload a file or point at a public page. Metabook nests its sections by heading level and
-          counts paragraphs, lists, tables, links and words in each one.
+          Upload a file or point at a public page. Metabook nests its sections by heading level and counts paragraphs,
+          lists, tables, links and words in each one.
         </p>
         <div className="flex flex-wrap gap-1.5">
           {FORMATS.map((format) => (
-            <span className="rounded-full px-2.5 py-0.5 text-muted-foreground text-xs ring-1 ring-foreground/8" key={format}>
+            <span
+              className="rounded-lg px-2.5 py-0.5 text-muted-foreground text-xs ring-1 ring-foreground/8"
+              key={format}
+            >
               {format}
             </span>
           ))}
@@ -105,13 +112,13 @@ export function DocumentView() {
       </Reveal>
 
       {state.phase === "done" ? (
-        <DocumentResult onReset={reset} result={state.result} />
+        <DocumentResult onResetAction={reset} result={state.result} />
       ) : (
         <Reveal className="grid grid-cols-1 gap-6 lg:grid-cols-12" delay={0.08}>
-          <div className="rounded-[2rem] bg-foreground/[0.03] p-1.5 ring-1 ring-foreground/6 lg:col-span-7 dark:bg-white/[0.03]">
+          <div className="rounded-xl bg-foreground/3 p-1.5 ring-1 ring-foreground/6 lg:col-span-7 dark:bg-white/3">
             <div
               className={cn(
-                "relative flex h-full flex-col items-center justify-center gap-5 rounded-[calc(2rem-0.375rem)] border border-dashed border-foreground/12 bg-card px-6 py-10 text-center shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] transition-[background-color,border-color,scale] duration-500 ease-spring dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] sm:py-12",
+                "relative flex h-full flex-col items-center justify-center gap-5 rounded-xl border border-dashed border-foreground/12 bg-card px-6 py-10 text-center shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] transition-[background-color,border-color,scale] duration-500 ease-spring dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] sm:py-12",
                 dragging && "scale-[0.99] border-primary/60 bg-brand-subtle",
               )}
               onDragLeave={() => setDragging(false)}
@@ -123,7 +130,8 @@ export function DocumentView() {
                 event.preventDefault();
                 setDragging(false);
                 if (event.dataTransfer.files.length !== 1) {
-                  if (!busy) setState({ phase: "error", source: "these files", message: "Choose one document at a time." });
+                  if (!busy)
+                    setState({ phase: "error", source: "these files", message: "Choose one document at a time." });
                   return;
                 }
                 upload(event.dataTransfer.files[0]);
@@ -145,31 +153,35 @@ export function DocumentView() {
                       </ProgressLabel>
                       {!sent && <ProgressValue />}
                     </div>
-                    <ProgressTrack className="h-1.5 rounded-full">
-                      <ProgressIndicator className={cn("rounded-full", sent && "w-full! animate-pulse")} />
+                    <ProgressTrack className="h-1.5 rounded-lg">
+                      <ProgressIndicator className={cn("rounded-lg", sent && "w-full! animate-pulse")} />
                     </ProgressTrack>
                   </Progress>
                   <p className="text-subtle-foreground text-xs">
-                    {sent ? "Processing the document. You can cancel while waiting." : `${formatBytes(uploading.progress.loaded)} of ${formatBytes(uploading.progress.total)}`}
+                    {sent
+                      ? "Processing the document. You can cancel while waiting."
+                      : `${formatBytes(uploading.progress.loaded)} of ${formatBytes(uploading.progress.total)}`}
                   </p>
                   <Button className="self-center" onClick={uploading.abort} size="sm" variant="ghost">
-                      Cancel
+                    Cancel
                   </Button>
                 </div>
               ) : (
                 <>
                   <div className="flex flex-col gap-1.5">
                     <p className="font-medium text-lg tracking-tight">Drop a document</p>
-                    <p className="text-muted-foreground text-sm">HTML, Markdown, PDF or plain text. Nothing is saved.</p>
+                    <p className="text-muted-foreground text-sm">
+                      HTML, Markdown, PDF or plain text. Nothing is saved.
+                    </p>
                   </div>
                   <Button
-                    className="group h-11 rounded-full ps-5 pe-1.5 active:scale-[0.98]"
+                    className="group h-11 rounded-lg ps-5 pe-1.5 active:scale-[0.98]"
                     disabled={busy}
                     onClick={() => input.current?.click()}
                     variant="outline"
                   >
                     Browse file
-                    <span className="flex size-8 items-center justify-center rounded-full transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105">
+                    <span className="flex size-8 items-center justify-center rounded-lg transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105">
                       <ArrowRightIcon weight="light" />
                     </span>
                   </Button>
@@ -189,9 +201,9 @@ export function DocumentView() {
             </div>
           </div>
 
-          <div className="rounded-[2rem] bg-foreground/[0.03] p-1.5 ring-1 ring-foreground/6 lg:col-span-5 dark:bg-white/[0.03]">
+          <div className="rounded-xl bg-foreground/3 p-1.5 ring-1 ring-foreground/6 lg:col-span-5 dark:bg-white/3">
             <form
-              className="flex h-full flex-col gap-5 rounded-[calc(2rem-0.375rem)] bg-card p-6 shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]"
+              className="flex h-full flex-col gap-5 rounded-xl bg-card p-6 shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]"
               onSubmit={(event) => {
                 event.preventDefault();
                 fetchUrl();
@@ -206,7 +218,7 @@ export function DocumentView() {
                   Public pages only. The API downloads it once, within 10 seconds, and keeps nothing.
                 </p>
               </div>
-              <InputGroup className="mt-auto rounded-full">
+              <InputGroup className="mt-auto rounded-lg">
                 <InputGroupAddon>
                   {state.phase === "fetching" ? <Spinner /> : <GlobeSimpleIcon weight="light" />}
                 </InputGroupAddon>
@@ -222,12 +234,12 @@ export function DocumentView() {
                 />
               </InputGroup>
               <Button
-                className="group h-11 w-full rounded-full ps-5 pe-1.5 active:scale-[0.98]"
+                className="group h-11 w-full rounded-lg ps-5 pe-1.5 active:scale-[0.98]"
                 disabled={busy || !url.trim()}
                 type="submit"
               >
                 <span className="flex-1 text-start">{state.phase === "fetching" ? "Fetching…" : "Analyse URL"}</span>
-                <span className="flex size-8 items-center justify-center rounded-full transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:scale-105">
+                <span className="flex size-8 items-center justify-center rounded-lg transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:scale-105">
                   <ArrowRightIcon weight="light" />
                 </span>
               </Button>
@@ -240,7 +252,7 @@ export function DocumentView() {
           </div>
 
           {state.phase === "error" && (
-            <Alert className="rounded-[1.5rem] lg:col-span-12" variant="error">
+            <Alert className="rounded-xl lg:col-span-12" variant="error">
               <AlertTitle className="wrap-anywhere">Couldn&apos;t analyse {state.source}</AlertTitle>
               <AlertDescription>{state.message}</AlertDescription>
             </Alert>

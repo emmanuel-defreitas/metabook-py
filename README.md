@@ -5,17 +5,17 @@
     <img src="assets/logo-light.png" alt="metabook-py" width="160"/>
   </picture>
 
-  # metabook-py
+# metabook-py
 
-  [![PR](https://img.shields.io/github/actions/workflow/status/emmanuel-defreitas/metabook-py/pr.yml?branch=dev&label=PR%20checks)](https://github.com/emmanuel-defreitas/metabook-py/actions/workflows/pr.yml)
-  [![Matrix](https://img.shields.io/github/actions/workflow/status/emmanuel-defreitas/metabook-py/matrix.yml?label=matrix)](https://github.com/emmanuel-defreitas/metabook-py/actions/workflows/matrix.yml)
-  [![Release](https://img.shields.io/github/v/release/emmanuel-defreitas/metabook-py?include_prereleases&label=release)](https://github.com/emmanuel-defreitas/metabook-py/releases)
-  [![Python](https://img.shields.io/badge/python-3.13%2B-blue)](pyproject.toml)
-  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![PR](https://img.shields.io/github/actions/workflow/status/emmanuel-defreitas/metabook-py/pr.yml?branch=dev&label=PR%20checks)](https://github.com/emmanuel-defreitas/metabook-py/actions/workflows/pr.yml)
+[![Matrix](https://img.shields.io/github/actions/workflow/status/emmanuel-defreitas/metabook-py/matrix.yml?label=matrix)](https://github.com/emmanuel-defreitas/metabook-py/actions/workflows/matrix.yml)
+[![Release](https://img.shields.io/github/v/release/emmanuel-defreitas/metabook-py?include_prereleases&label=release)](https://github.com/emmanuel-defreitas/metabook-py/releases)
+[![Python](https://img.shields.io/badge/python-3.13%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-  **📚 X-ray any book's structure — chapters, paragraphs, sentences, clauses, words — as clean JSON. REST + MCP, Project Gutenberg search or your own EPUB. No book text ever leaves the API.**
+**📚 X-ray any book's structure — chapters, paragraphs, sentences, clauses, words — as clean JSON. REST + MCP, Project Gutenberg search or your own EPUB. No book text ever leaves the API.**
 
-  [API docs](#-rest-api) · [Web app](#-web-app) · [MCP server](#-mcp-server) · [Desktop example](#-desktop-example-gpui) · [Workflow](.github/WORKFLOW.md)
+[API docs](#-rest-api) · [Web app](#-web-app) · [MCP server](#-mcp-server) · [Desktop example](#-desktop-example-gpui) · [Workflow](.github/WORKFLOW.md)
 
   <img src="assets/demo.gif" alt="Metabook desktop example searching Pride and Prejudice and exploring its structural schema" width="860"/>
 </div>
@@ -24,7 +24,7 @@
 
 ## Overview
 
-Metabook is a **Book Structure API**: give it a title, an ISBN, a Gutenberg ID, or an EPUB file, and it returns the book's *structural schema* — what kind of book it is and how it's shaped — without ever returning the text itself.
+Metabook is a **Book Structure API**: give it a title, an ISBN, a Gutenberg ID, or an EPUB file, and it returns the book's _structural schema_ — what kind of book it is and how it's shaped — without ever returning the text itself.
 
 Under the hood it locates the book via [Gutendex](https://gutendex.com) (or walks your uploaded EPUB's spine), downloads and cleans the text, detects the structural schema, and counts everything at every level.
 
@@ -48,12 +48,12 @@ your .epub ──► Vercel Blob ──► package doc + spine XHTML ───�
 
 The `detail` parameter controls how deep the returned tree nests beneath each paragraph:
 
-| `detail` | Nested nodes |
-|----------|-----------------------------------------|
+| `detail`    | Nested nodes                          |
+| ----------- | ------------------------------------- |
 | `paragraph` | paragraphs only (counts for the rest) |
-| `sentence` | + sentence nodes |
-| `clause` | + clause nodes |
-| `word` | + word nodes (index + position only) |
+| `sentence`  | + sentence nodes                      |
+| `clause`    | + clause nodes                        |
+| `word`      | + word nodes (index + position only)  |
 
 ### Token counts
 
@@ -218,40 +218,78 @@ returns (zero counts omitted here for brevity; the API returns every field):
 
 ```jsonc
 {
-  "document": { "format": "markdown", "content_type": "text/markdown", "size_bytes": 96,
-                "sha256": "e8fe6210…", "page_count": null, "filename": "notes.md", "source_url": null },
+  "document": {
+    "format": "markdown",
+    "content_type": "text/markdown",
+    "size_bytes": 96,
+    "sha256": "e8fe6210…",
+    "page_count": null,
+    "filename": "notes.md",
+    "source_url": null,
+  },
   "structure": {
-    "totals": { "headings": 2, "paragraphs": 2, "lists": 1, "list_items": 2, "links": 1,
-                "sentences": 5, "words": 12, "sections": 3, "max_depth": 2 },
+    "totals": {
+      "headings": 2,
+      "paragraphs": 2,
+      "lists": 1,
+      "list_items": 2,
+      "links": 1,
+      "sentences": 5,
+      "words": 12,
+      "sections": 3,
+      "max_depth": 2,
+    },
     "sections": [
-      { "kind": "preamble", "level": 0, "index": 0, "path": "0",
-        "counts": { "paragraphs": 1, "links": 1, "sentences": 1, "words": 5 }, "children": [] },
-      { "kind": "section", "level": 1, "index": 1, "path": "1",
+      {
+        "kind": "preamble",
+        "level": 0,
+        "index": 0,
+        "path": "0",
+        "counts": { "paragraphs": 1, "links": 1, "sentences": 1, "words": 5 },
+        "children": [],
+      },
+      {
+        "kind": "section",
+        "level": 1,
+        "index": 1,
+        "path": "1",
         "counts": { "headings": 1, "paragraphs": 1, "sentences": 2, "words": 5 },
         "totals": { "headings": 2, "paragraphs": 1, "lists": 1, "list_items": 2, "sentences": 4, "words": 7 },
         "children": [
-          { "kind": "section", "level": 3, "index": 1, "path": "1.1",
+          {
+            "kind": "section",
+            "level": 3,
+            "index": 1,
+            "path": "1.1",
             "counts": { "headings": 1, "lists": 1, "list_items": 2, "sentences": 2, "words": 2 },
-            "children": [] } ] } ]
+            "children": [],
+          },
+        ],
+      },
+    ],
   },
-  "meta": { "schema_version": "1.0", "parser": "python", "processing_time_ms": 1,
-            "analyzed_at": "2026-11-02T13:01:11Z" }
+  "meta": {
+    "schema_version": "1.0",
+    "parser": "python",
+    "processing_time_ms": 1,
+    "analyzed_at": "2026-11-02T13:01:11Z",
+  },
 }
 ```
 
 ## 🌐 REST API
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/api/books/structure` | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`, `tokenizer`) |
-| `GET` | `/api/books/search` | Browse Gutendex metadata by `q` (title/author), `isbn`, or `gutenberg_id`; supports `page` and optional `language` |
-| `GET` | `/api/books/structure/schemas` | List the supported structural schemas |
-| `POST` | `/api/books/upload` | Upload an EPUB and analyse it |
-| `GET` | `/api/books/uploads` | List saved books (`DATABASE_URL` or legacy `MONGODB_URI`) |
-| `GET` | `/api/books/uploads/{id}/structure` | Reopen a saved PostgreSQL scan |
-| `POST` | `/api/documents/analyze` | Analyse one uploaded document (multipart `file`) |
-| `POST` | `/api/documents/analyze-url` | Fetch a public URL (`{"url": …}`) and analyse it |
-| `GET` | `/api/health` | Database readiness + cache stats (`/health` remains an alias) |
+| Method | Endpoint                            | Purpose                                                                                                            |
+| ------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `GET`  | `/api/books/structure`              | Analyse by `title`, `isbn`, or `gutenberg_id` (+ `detail`, `tokenizer`)                                            |
+| `GET`  | `/api/books/search`                 | Browse Gutendex metadata by `q` (title/author), `isbn`, or `gutenberg_id`; supports `page` and optional `language` |
+| `GET`  | `/api/books/structure/schemas`      | List the supported structural schemas                                                                              |
+| `POST` | `/api/books/upload`                 | Upload an EPUB and analyse it                                                                                      |
+| `GET`  | `/api/books/uploads`                | List saved books (`DATABASE_URL` or legacy `MONGODB_URI`)                                                          |
+| `GET`  | `/api/books/uploads/{id}/structure` | Reopen a saved PostgreSQL scan                                                                                     |
+| `POST` | `/api/documents/analyze`            | Analyse one uploaded document (multipart `file`)                                                                   |
+| `POST` | `/api/documents/analyze-url`        | Fetch a public URL (`{"url": …}`) and analyse it                                                                   |
+| `GET`  | `/api/health`                       | Database readiness + cache stats (`/health` remains an alias)                                                      |
 
 Interactive OpenAPI docs live at `/api/docs`.
 
@@ -268,12 +306,12 @@ and then `npm run dev` in `web/`; see [web/README.md](web/README.md).
 
 A [FastMCP](https://gofastmcp.com) server is mounted at `/api/mcp` (with `/mcp` kept as an alias), so agents can use the same service layer through four tools:
 
-| Tool | Description |
-|------|-------------|
-| `search_book_structure` | Analyse a book by title, ISBN, or Gutenberg ID |
-| `upload_book_epub` | Analyse an EPUB passed as base64 or a URL |
-| `list_supported_schemas` | Enumerate the structural schemas |
-| `analyze_document` | Analyse one HTML / Markdown / PDF / text document (base64 or URL) |
+| Tool                     | Description                                                       |
+| ------------------------ | ----------------------------------------------------------------- |
+| `search_book_structure`  | Analyse a book by title, ISBN, or Gutenberg ID                    |
+| `upload_book_epub`       | Analyse an EPUB passed as base64 or a URL                         |
+| `list_supported_schemas` | Enumerate the structural schemas                                  |
+| `analyze_document`       | Analyse one HTML / Markdown / PDF / text document (base64 or URL) |
 
 ## ⏱️ Parser benchmark
 
@@ -294,12 +332,12 @@ sentence splitter (the top hotspot: 46% of KJV parse time) and preprocesses
 once per request instead of three times; "Rust" is `METABOOK_PARSER=rust`.
 Book responses are byte-identical across all three.
 
-| Book | Metric | v3.1.0 | Python | Rust |
-|------|--------|-------:|-------:|-----:|
-| King James Bible (PG 10, 4.3 MB) | parse | 1,033 ms | 622 ms | 500 ms |
-| | full request, cold cache | 1,125 ms | 662 ms | 526 ms |
-| *Walking*, Thoreau (PG 1022, 87 KB) | parse | 13.2 ms | 6.5 ms | 4.4 ms |
-| | full request, cold cache | 36 ms | 29 ms | 26 ms |
+| Book                                | Metric                   |   v3.1.0 | Python |   Rust |
+| ----------------------------------- | ------------------------ | -------: | -----: | -----: |
+| King James Bible (PG 10, 4.3 MB)    | parse                    | 1,033 ms | 622 ms | 500 ms |
+|                                     | full request, cold cache | 1,125 ms | 662 ms | 526 ms |
+| _Walking_, Thoreau (PG 1022, 87 KB) | parse                    |  13.2 ms | 6.5 ms | 4.4 ms |
+|                                     | full request, cold cache |    36 ms |  29 ms |  26 ms |
 
 With the Rust core, sentence splitting and word counting drop to ~25 ms of
 KJV parse time. What remains is book-specific Python (verse/chapter splitting
@@ -309,14 +347,14 @@ core does not cover yet. Real network adds ~1 s to a cold KJV request
 
 Single-document analysis (`analyze_document`, best of 3):
 
-| Input | Python | Rust |
-|-------|-------:|-----:|
-| KJV as `text/plain` (4.3 MB) | 246 ms | 44 ms |
-| `paper.md` × 2000 (2.4 MB) | 373 ms | 164 ms |
+| Input                        | Python |   Rust |
+| ---------------------------- | -----: | -----: |
+| KJV as `text/plain` (4.3 MB) | 246 ms |  44 ms |
+| `paper.md` × 2000 (2.4 MB)   | 373 ms | 164 ms |
 
 ## 🦀 Native parsing core
 
-`rust/metabook_core` is a Rust port of the shared tokenizer (sentences,
+`src/metabook_core` is a Rust port of the shared tokenizer (sentences,
 words), the plain-text and Markdown adapters, and the section-tree builder,
 exposed to Python with PyO3 and built with maturin. HTML and PDF stay on their
 Python adapters and hand their block trees to the Rust builder.
@@ -339,47 +377,8 @@ make rust-test                  # cargo test/clippy + pytest under both parsers
 - A small CLI prints the same JSON for Markdown and plain-text files:
 
 ```bash
-rust/metabook_core/target/release/metabook analyze tests/fixtures/documents/paper.md
+src/metabook_core/target/release/metabook analyze tests/fixtures/documents/paper.md
 ```
-
-## 🖥️ Desktop example (GPUI)
-
-[`example/`](example) is a native macOS client built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-component): a sidebar workspace whose Dashboard holds fuzzy search, EPUB drag-and-drop, and a cover grid of every book the API has scanned; selecting a book gives an animated lazily-materialised structure tree beside a read-only JSON code editor (tree-sitter highlighting, folding) that scrolls to and highlights whichever node you select. Light and dark themes, spring animations, collapsible sidebar.
-
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
-    <img src="assets/screenshot-light.png" alt="Metabook desktop example — structure tree synced with the JSON schema editor" width="860"/>
-  </picture>
-</div>
-
-<details>
-<summary>More screenshots</summary>
-
-| Search results | Dark mode |
-|---|---|
-| ![Search matches](assets/screenshot-search.png) | ![Dark mode](assets/screenshot-dark.png) |
-
-</details>
-
-Run it (API first, then the app):
-
-```bash
-make dev
-```
-
-```bash
-cd example && cargo run
-```
-
-Or run both with one command (Ctrl-C stops both):
-
-```bash
-make serve
-```
-
-See [`example/README.md`](example/README.md) for the `Metabook.app` bundle (with app icon) and `METABOOK_API` configuration.
 
 ## 🌳 Branching and release
 
@@ -413,7 +412,6 @@ make bootstrap-lanes
 ## 📄 License
 
 [MIT](LICENSE) © Emmanuel De Freitas
-
 
 ### Explainable schema detection and cleanup
 
@@ -452,13 +450,13 @@ scores do not sum to one. Selection retains the established priority:
 scripture, sectioned book, standard book, essay/story collection, then flat.
 The evidence contains counts only, never matched source excerpts.
 
-| Schema | Signals and eligibility |
-| --- | --- |
-| `canonical_scripture` | At least 10 line-leading chapter:verse numbers; weaker inputs score `0.03 × verse_count` |
-| `sectioned_book` | At least 2 part markers and 2 explicit chapter markers; support uses their combined count |
-| `standard_book` | At least 2 explicit chapter headings or standalone dotted numerals; support uses the larger count |
+| Schema                      | Signals and eligibility                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `canonical_scripture`       | At least 10 line-leading chapter:verse numbers; weaker inputs score `0.03 × verse_count`                        |
+| `sectioned_book`            | At least 2 part markers and 2 explicit chapter markers; support uses their combined count                       |
+| `standard_book`             | At least 2 explicit chapter headings or standalone dotted numerals; support uses the larger count               |
 | `essay_or_story_collection` | At least 2 all-caps title lines excluding structural keywords; repeated title + `By …` lines strengthen support |
-| `flat` | Fallback, with score 0.2 when no structural signals exist and 0.1 when weak signals exist |
+| `flat`                      | Fallback, with score 0.2 when no structural signals exist and 0.1 when weak signals exist                       |
 
 For eligible marked schemas, support is `min(0.9, 0.3 + 0.1 × marker_count)`.
 Chapter and title candidates also expose subthreshold support for a single
@@ -502,11 +500,10 @@ character offsets into the source download. Removing a contents page changes
 these body ordinals and totals; no original-source offset mapping is promised.
 The existing structural-only response contract remains in place.
 
-The in-repo `example/` client displays the complete response JSON, including
-these additive fields. Before release, review adoption in
-`emmanuel-defreitas/MetaBookSDK` and the MetaBook app, especially the corrected
-flat confidence and changed counts. External issue creation and publication
-are deferred to an authorised review/release step.
+Before release, review adoption in `emmanuel-defreitas/MetaBookSDK` and the
+MetaBook app, especially the corrected flat confidence and changed counts.
+External issue creation and publication are deferred to an authorised
+review/release step.
 
 Future feedback ideas, outside this change: dialogue share per chapter with
 quoted spans represented only by positions, and sentence-length distributions.

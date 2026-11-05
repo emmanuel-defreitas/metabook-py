@@ -45,7 +45,7 @@ export function SearchField({
     >
       <InputGroup
         className={cn(
-          "rounded-full",
+          "rounded-lg",
           hero && "h-14 bg-card text-lg shadow-[0_18px_48px_-24px_rgba(15,18,23,0.28)] sm:h-16 sm:text-lg",
         )}
       >

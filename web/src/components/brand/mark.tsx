@@ -6,7 +6,7 @@ export function Mark({ className, size = 32 }: { className?: string; size?: numb
     <span
       aria-hidden
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-[28%] bg-mark text-mark-foreground shadow-[inset_0_1px_1px_rgba(255,255,255,0.28),0_6px_16px_-6px_color-mix(in_oklab,var(--mark)_60%,transparent)]",
+        "inline-flex shrink-0 items-center justify-center rounded-xl bg-mark text-mark-foreground shadow-[inset_0_1px_1px_rgba(255,255,255,0.28),0_6px_16px_-6px_color-mix(in_oklab,var(--mark)_60%,transparent)]",
         className,
       )}
       style={{ width: size, height: size }}

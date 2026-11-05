@@ -75,6 +75,7 @@ _DOC_ERRORS = (
 )
 async def analyze_upload(
     file: Annotated[UploadFile, File(description="HTML, Markdown, PDF or plain-text file")],
+    detail: bool = False,
 ) -> DocumentAnalysisResponse:
     """
     Parse one document (HTML, Markdown, PDF or plain text) into a section tree
@@ -87,7 +88,7 @@ async def analyze_upload(
     data = await file.read(settings.document_max_bytes + 1)
     try:
         return await run_in_threadpool(
-            analyze_document, data, content_type=file.content_type, filename=file.filename
+            analyze_document, data, content_type=file.content_type, filename=file.filename, detail=detail
         )
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc
@@ -103,7 +104,7 @@ async def analyze_upload(
     },
     summary="Fetch a document by URL and analyse its semantic structure",
 )
-async def analyze_url(body: AnalyzeUrlRequest) -> DocumentAnalysisResponse:
+async def analyze_url(body: AnalyzeUrlRequest, detail: bool = False) -> DocumentAnalysisResponse:
     """
     Fetch a public http(s) URL (10 s limit, 20 MB, private addresses refused)
     and return the same structure as `POST /analyze`.
@@ -111,6 +112,6 @@ async def analyze_url(body: AnalyzeUrlRequest) -> DocumentAnalysisResponse:
     **No text content is included in the response.**
     """
     try:
-        return await analyze_document_url(str(body.url))
+        return await analyze_document_url(str(body.url), detail=detail)
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc

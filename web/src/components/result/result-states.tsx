@@ -11,9 +11,9 @@ export function ResultSkeleton({ message }: { message?: string }) {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-4 pt-10 pb-32 sm:px-8 sm:pt-14" aria-busy>
       <div className="flex flex-col gap-4">
-        <Skeleton className="h-5 w-20 rounded-full" />
+        <Skeleton className="h-5 w-20 rounded-lg" />
         <Skeleton className="h-12 w-3/4 rounded-2xl" />
-        <Skeleton className="h-6 w-1/3 rounded-full" />
+        <Skeleton className="h-6 w-1/3 rounded-lg" />
         {message && (
           <p className="flex items-center gap-2 text-muted-foreground text-sm" aria-live="polite">
             <Spinner className="size-4" />
@@ -27,8 +27,8 @@ export function ResultSkeleton({ message }: { message?: string }) {
         ))}
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Skeleton className="aspect-square rounded-[2rem] lg:col-span-7" />
-        <Skeleton className="h-96 rounded-[2rem] lg:col-span-5" />
+        <Skeleton className="aspect-square rounded-xl lg:col-span-7" />
+        <Skeleton className="h-96 rounded-xl lg:col-span-5" />
       </div>
     </div>
   );
@@ -47,11 +47,11 @@ export function ResultError({ message, onRetry }: { message: string; onRetry?: (
         </EmptyHeader>
         <EmptyContent>
           <div className="flex gap-2">
-            <Button className="rounded-full" render={<Link href="/#library" />} variant="outline">
+            <Button className="rounded-lg" render={<Link href="/#library" />} variant="outline">
               Return to library
             </Button>
             {onRetry && (
-              <Button className="rounded-full" onClick={onRetry}>
+              <Button className="rounded-lg" onClick={onRetry}>
                 Try again
               </Button>
             )}

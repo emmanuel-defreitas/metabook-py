@@ -15,7 +15,7 @@ function Cover({ record }: { record: UploadRecord }) {
   const [failed, setFailed] = useState(false);
   const url = record.gutenberg_id ? gutenbergCoverUrl(record.gutenberg_id) : null;
   return (
-    <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[calc(1.5rem-0.375rem)] bg-secondary ring-1 ring-foreground/6">
+    <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-secondary ring-1 ring-foreground/6">
       {url && !failed ? (
         // Remote Gutenberg covers are served as-is, not through the image optimiser.
         <Image
@@ -41,10 +41,10 @@ export function BookCard({ record, now }: { record: UploadRecord; now: number })
   const source = record.source === "upload" ? "Upload" : "Gutendex";
   return (
     <Link
-      className="group block rounded-[1.75rem] bg-foreground/[0.03] p-1.5 outline-none ring-1 ring-foreground/6 transition-[scale,box-shadow] duration-500 ease-spring hover:shadow-[0_24px_48px_-28px_rgba(15,18,23,0.35)] focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99] dark:bg-white/[0.03]"
+      className="group block rounded-xl bg-foreground/[0.03] p-1.5 outline-none ring-1 ring-foreground/6 transition-[scale,box-shadow] duration-500 ease-spring hover:shadow-[0_24px_48px_-28px_rgba(15,18,23,0.35)] focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99] dark:bg-white/[0.03]"
       href={`/books/${encodeURIComponent(record.id)}`}
     >
-      <article className="grid h-full grid-cols-2 gap-4 rounded-[calc(1.75rem-0.375rem)] bg-card p-1.5 pe-4 shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]">
+      <article className="grid h-full grid-cols-2 gap-4 rounded-xl bg-card p-1.5 pe-4 shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]">
         <Cover record={record} />
         <div className="flex min-w-0 flex-col gap-3 py-3">
           <div className="flex flex-wrap gap-1">

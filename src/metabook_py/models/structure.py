@@ -12,7 +12,7 @@ Node hierarchy:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_serializer
 
@@ -30,7 +30,7 @@ class _OmitAbsentTokenFields(BaseModel):
     def _omit_absent_token_fields(self, handler):
         data = handler(self)
         if isinstance(data, dict):
-            for key in _TOKEN_FIELDS:
+            for key in (*_TOKEN_FIELDS, "role"):
                 if key in data and data[key] is None:
                     del data[key]
         return data
@@ -70,6 +70,7 @@ class SentenceNode(_OmitAbsentTokenFields):
 
 class ParagraphNode(_OmitAbsentTokenFields):
     index: int
+    role: Literal["heading", "illustration"] | None = None
     sentence_count: int
     word_count: int
     token_count: int | None = None  # None unless a tokenizer was requested

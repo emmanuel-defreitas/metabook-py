@@ -115,3 +115,14 @@ All integers: `headings`, `paragraphs`, `lists`, `list_items`, `tables`, `figure
 | markdown | ATX (`#`) and setext (`===` = 1, `---` = 2) | Fenced and indented code, GFM tables, nested lists, front matter skipped |
 | text | setext underlines, numbered (`2.` = 1, `2.1` = 2 …), short ALL-CAPS lines = 1 | `>` quotes, `-`/`*`/`•`/`1.` lists, `|`-tables |
 | pdf | Lines set larger than the body font; distinct sizes ranked largest = 1 | Paragraphs split on vertical gaps; tables and code are not detected (always 0) |
+
+
+### Detailed node exploration
+
+The web app requests `?detail=true` on `/api/documents/analyze` and
+`/api/documents/analyze-url`. This opt-in uses the Python parser and returns
+`paragraphs` for each section's own prose, with sentence, clause and positional
+word children. `counts.clauses` and `totals.clauses` report own and cumulative
+clause counts. No prose is returned; word nodes have positions only, and no token
+counts are fabricated. Existing totals-only requests retain their response shape
+and configured parser. Older results must be analysed again to obtain detail.

@@ -254,12 +254,12 @@ export function uploadDocument(file: File, onProgress: (progress: UploadProgress
   if (file.size > DOCUMENT_MAX_BYTES) {
     return { promise: Promise.reject(new ApiError("That file exceeds the 20 MB limit. Choose a smaller document.", 413)), abort: () => {} };
   }
-  return uploadFile<DocumentAnalysis>("/api/documents/analyze", file, onProgress, validDocument);
+  return uploadFile<DocumentAnalysis>("/api/documents/analyze?detail=true", file, onProgress, validDocument);
 }
 
 export async function analyseDocumentUrl(url: string, signal?: AbortSignal): Promise<DocumentAnalysis> {
   return validDocument(
-    await request<DocumentAnalysis>("/api/documents/analyze-url", {
+    await request<DocumentAnalysis>("/api/documents/analyze-url?detail=true", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),

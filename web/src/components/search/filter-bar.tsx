@@ -46,7 +46,7 @@ function MultiFilter({
     >
       <SelectTrigger
         aria-label={label}
-        className={cn("w-auto min-w-36 rounded-full", value.length && "border-primary/40")}
+        className={cn("w-auto min-w-36 rounded-lg", value.length && "border-primary/40")}
       >
         <SelectValue>{(selected: string[]) => summary(selected, options, empty)}</SelectValue>
       </SelectTrigger>
@@ -113,7 +113,7 @@ export function FilterBar({
         onValueChange={(source) => onChange({ ...filters, source: (source as string) ?? "gutendex" })}
         value={filters.source}
       >
-        <SelectTrigger aria-label="Source" className="w-auto min-w-32 rounded-full">
+        <SelectTrigger aria-label="Source" className="w-auto min-w-32 rounded-lg">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>

@@ -64,10 +64,10 @@ export function DropZone() {
   const sent = uploading && uploading.progress.loaded >= uploading.progress.total;
 
   return (
-    <div className="rounded-[2rem] bg-foreground/[0.03] p-1.5 ring-1 ring-foreground/6 dark:bg-white/[0.03]">
+    <div className="rounded-xl bg-foreground/[0.03] p-1.5 ring-1 ring-foreground/6 dark:bg-white/[0.03]">
       <div
         className={cn(
-          "relative flex flex-col items-center gap-5 rounded-[calc(2rem-0.375rem)] border border-dashed border-foreground/12 bg-card px-6 py-10 text-center shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] transition-[background-color,border-color,scale] duration-500 ease-spring dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] sm:py-12",
+          "relative flex flex-col items-center gap-5 rounded-xl border border-dashed border-foreground/12 bg-card px-6 py-10 text-center shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] transition-[background-color,border-color,scale] duration-500 ease-spring dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] sm:py-12",
           dragging && "scale-[0.99] border-primary/60 bg-brand-subtle",
         )}
         onDragLeave={() => setDragging(false)}
@@ -101,8 +101,8 @@ export function DropZone() {
                 </ProgressLabel>
                 {!sent && <ProgressValue />}
               </div>
-              <ProgressTrack className="h-1.5 rounded-full">
-                <ProgressIndicator className="rounded-full" />
+              <ProgressTrack className="h-1.5 rounded-lg">
+                <ProgressIndicator className="rounded-lg" />
               </ProgressTrack>
             </Progress>
             <p className="text-subtle-foreground text-xs">
@@ -125,12 +125,12 @@ export function DropZone() {
               </p>
             </div>
             <Button
-              className="group h-11 rounded-full ps-5 pe-1.5 active:scale-[0.98]"
+              className="group h-11 rounded-lg ps-5 pe-1.5 active:scale-[0.98]"
               onClick={() => input.current?.click()}
               variant="outline"
             >
               Browse file
-              <span className="flex size-8 items-center justify-center rounded-full transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105">
+              <span className="flex size-8 items-center justify-center rounded-lg transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px group-hover:scale-105">
                 <ArrowUpRightIcon weight="light" />
               </span>
             </Button>
@@ -150,7 +150,7 @@ export function DropZone() {
         />
       </div>
       {state.phase === "error" && (
-        <Alert className="mt-1.5 rounded-[calc(2rem-0.375rem)]" variant="error">
+        <Alert className="mt-1.5 rounded-xl" variant="error">
           <AlertTitle>Couldn&apos;t analyse {state.name}</AlertTitle>
           <AlertDescription>{state.message}</AlertDescription>
         </Alert>

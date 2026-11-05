@@ -737,3 +737,43 @@ async def test_mcp_errors():
         document_base64=base64.b64encode(b"x").decode(), content_type="image/png"
     )
     assert unsupported["status"] == 415
+
+
+@pytest.mark.parametrize("extension", ["html", "md", "txt", "pdf"])
+def test_document_word_detail(extension):
+    from metabook_py.services.documents.service import analyze_document
+
+    data = (Path(__file__).parent / "fixtures" / "documents" / f"paper.{extension}").read_bytes()
+    result = analyze_document(data, content_type=None, filename=f"paper.{extension}", detail=True)
+    assert result.meta.parser == "python"
+    assert result.structure.totals.clauses > 0
+
+    def check(section):
+        assert section.paragraphs is not None
+        clauses = 0
+        for paragraph in section.paragraphs:
+            assert len(paragraph.sentences) == paragraph.sentence_count
+            for sentence in paragraph.sentences:
+                assert len(sentence.clauses) == sentence.clause_count
+                clauses += sentence.clause_count
+                for clause in sentence.clauses:
+                    assert len(clause.words) == clause.word_count
+        assert clauses == section.counts.clauses
+        assert section.totals.clauses == clauses + sum(check(child) for child in section.children)
+        return section.totals.clauses
+
+    assert sum(check(section) for section in result.structure.sections) == result.structure.totals.clauses
+    assert '"text":' not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_upload_document_deep_detail():
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/documents/analyze?detail=true", files={
+            "file": ("example.txt", b"Hello, world. Another sentence!", "text/plain")
+        })
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["structure"]["totals"]["clauses"] >= 2
+    assert payload["structure"]["sections"][0]["paragraphs"][0]["sentences"][0]["clauses"]

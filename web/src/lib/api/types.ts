@@ -142,6 +142,7 @@ export interface CatalogPage {
 export type DocumentFormat = "html" | "markdown" | "pdf" | "text";
 
 export interface DocumentCounts {
+  clauses?: number;
   headings: number;
   paragraphs: number;
   lists: number;
@@ -170,6 +171,7 @@ export interface SectionNode {
   counts: DocumentCounts;
   totals: DocumentCounts;
   children: SectionNode[];
+  paragraphs?: StructureNode[];
 }
 
 export interface DocumentAnalysis {

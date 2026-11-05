@@ -131,6 +131,13 @@ def _para_node(
     wc = _count_words(text)
     return ParagraphNode(
         index=index,
+        role=(
+            "illustration"
+            if re.fullmatch(r"\[Illustration(?:\s*:[\s\S]*)?\]", text.strip(), re.IGNORECASE)
+            else "heading"
+            if CHAPTER_WORD_RE.fullmatch(text.strip()) or PART_RE.fullmatch(text.strip())
+            else None
+        ),
         sentence_count=sc,
         word_count=wc,
         token_count=encoder(text) if encoder else None,

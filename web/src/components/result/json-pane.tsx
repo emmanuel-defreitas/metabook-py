@@ -19,7 +19,7 @@ import type { Analysis } from "@/lib/api/types";
 import { formatBytes } from "@/lib/format";
 import { findNode, nodeFields } from "@/lib/structure";
 
-export function JsonPane({ analysis, selectedId }: { analysis: Analysis; selectedId: string | null }) {
+export function JsonPane({ analysis, selectedId, fullResult }: { analysis: Analysis; selectedId: string | null; fullResult?: unknown }) {
   const node = selectedId ? findNode(analysis.structure, selectedId) : null;
   const nodeJson = useMemo(
     () =>
@@ -30,7 +30,7 @@ export function JsonPane({ analysis, selectedId }: { analysis: Analysis; selecte
       ),
     [node, analysis],
   );
-  const full = useMemo(() => JSON.stringify(analysis, null, 2), [analysis]);
+  const full = useMemo(() => JSON.stringify(fullResult ?? analysis, null, 2), [analysis, fullResult]);
 
   const copy = async () => {
     try {
@@ -53,10 +53,10 @@ export function JsonPane({ analysis, selectedId }: { analysis: Analysis; selecte
   return (
     <div className="flex h-full flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="truncate font-medium text-sm">{node ? `${node.label}` : "Book summary"}</p>
+        <p className="truncate font-medium text-sm">{node ? `${node.label}` : analysis.structure.schema === "document" ? "Document summary" : "Book summary"}</p>
         <div className="flex gap-1">
           <Dialog>
-            <DialogTrigger render={<Button className="rounded-full" size="sm" variant="outline" />}>
+            <DialogTrigger render={<Button className="rounded-lg" size="sm" variant="outline" />}>
               <BracketsCurlyIcon weight="light" />
               Full JSON
             </DialogTrigger>
@@ -68,19 +68,19 @@ export function JsonPane({ analysis, selectedId }: { analysis: Analysis; selecte
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel>
-                <JsonCodeBlock value={analysis} />
+                <JsonCodeBlock value={fullResult ?? analysis} />
               </DialogPanel>
             </DialogPopup>
           </Dialog>
-          <Button aria-label="Copy JSON" className="rounded-full" onClick={copy} size="icon-sm" variant="ghost">
+          <Button aria-label="Copy JSON" className="rounded-lg" onClick={copy} size="icon-sm" variant="ghost">
             <CopyIcon weight="light" />
           </Button>
-          <Button aria-label="Download JSON" className="rounded-full" onClick={download} size="icon-sm" variant="ghost">
+          <Button aria-label="Download JSON" className="rounded-lg" onClick={download} size="icon-sm" variant="ghost">
             <DownloadSimpleIcon weight="light" />
           </Button>
         </div>
       </div>
-      <ScrollArea className="h-[25.5rem] rounded-xl bg-secondary/60">
+      <ScrollArea className="h-64 rounded-xl bg-secondary/60">
         <div>
           <JsonCodeBlock value={JSON.parse(nodeJson)} />
         </div>
