@@ -8,7 +8,7 @@ from uuid import uuid4
 from gridfs import AsyncGridFSBucket
 from gridfs.errors import NoFile
 from pymongo import AsyncMongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from metabook_py.core.identity import browser_user_id
 from metabook_py.services.postgres import PersistenceError
@@ -102,6 +102,18 @@ class UserLibraryStore:
         if not owner:
             return None
         await self.initialize()
+        try:
+            try:
+                return await self._write(owner, doc, gutenberg_id)
+            except DuplicateKeyError:
+                if gutenberg_id is None:
+                    raise
+                # Another request saved this book first: update its record instead.
+                return await self._write(owner, doc, gutenberg_id)
+        except PyMongoError as exc:
+            raise PersistenceError("Could not save the parsed result") from exc
+
+    async def _write(self, owner, doc, gutenberg_id):
         file_id = None
         try:
             query = {"user_id": owner, "source": "gutenberg", "gutenberg_id": gutenberg_id}
@@ -124,10 +136,10 @@ class UserLibraryStore:
                 await self.collection.replace_one({"_id": record_id, "user_id": owner}, record)
             else:
                 await self.collection.insert_one(record)
-        except PyMongoError as exc:
+        except PyMongoError:
             if file_id is not None:
                 await self.bucket.delete(file_id)
-            raise PersistenceError("Could not save the parsed result") from exc
+            raise
         # Retain earlier GridFS versions: concurrent readers may still use them.
         return record_id
 

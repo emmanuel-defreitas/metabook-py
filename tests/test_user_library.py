@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from metabook_py.core.identity import browser_user_id
 from metabook_py.main import app
@@ -51,6 +52,27 @@ async def test_save_complete_result_and_metadata(store):
         assert saved["result_id"] == "file-id"
         payload = json.loads(store.bucket.upload_from_stream.call_args.args[1])
         assert payload == {**result, "record_id": key}
+    finally:
+        browser_user_id.reset(token)
+
+
+async def test_first_save_race_updates_the_winning_record(store):
+    """Two tabs saving the same new book: the loser updates the winner's record."""
+    from datetime import UTC, datetime
+
+    winner = {"_id": "winner", "created_at": datetime.now(UTC)}
+    store.collection.find_one.side_effect = [None, winner]
+    store.collection.insert_one.side_effect = DuplicateKeyError("dup")
+    store.bucket.upload_from_stream.side_effect = ["lost-file", "kept-file"]
+    token = browser_user_id.set(str(uuid4()))
+    try:
+        result = {"book": {"title": "Test"}, "structure": {"nodes": []}}
+        key = await store._save({"result": result, "book": result["book"]}, gutenberg_id=84)
+        assert key == "winner"
+        store.bucket.delete.assert_awaited_once_with("lost-file")
+        saved = store.collection.replace_one.call_args.args[1]
+        assert saved["result_id"] == "kept-file"
+        assert saved["created_at"] == winner["created_at"]
     finally:
         browser_user_id.reset(token)
 
