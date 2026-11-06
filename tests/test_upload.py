@@ -22,6 +22,7 @@ def client() -> httpx.AsyncClient:
 
 @pytest.fixture
 def blob_token(monkeypatch):
+    monkeypatch.setattr(settings, "open_library_enabled", False)
     monkeypatch.setattr(settings, "blob_read_write_token", "vercel_blob_rw_test_token")
 
 
@@ -121,6 +122,7 @@ async def test_rejects_oversized_file(client, blob_token, monkeypatch):
 
 
 async def test_missing_token_yields_502(client, monkeypatch):
+    monkeypatch.setattr(settings, "open_library_enabled", False)
     monkeypatch.setattr(settings, "blob_read_write_token", "")
     resp = await client.post(
         "/api/books/upload",
@@ -139,3 +141,30 @@ async def test_blob_error_yields_502(client, blob_token):
     )
     assert resp.status_code == 502
     assert resp.json()["detail"]["error"] == "blob_upload_failed"
+
+
+@respx.mock
+async def test_upload_includes_catalog_metadata(client, blob_token, monkeypatch):
+    from metabook_py.services import open_library
+
+    monkeypatch.setattr(settings, "open_library_enabled", True)
+    monkeypatch.setattr(open_library, "_next_request", 0)
+    open_library._cache.clear()
+    _mock_blob_ok()
+    respx.get("https://openlibrary.org/api/books").respond(
+        200,
+        json={
+            "ISBN:9780141439518": {
+                "identifiers": {"openlibrary": ["OL123M"]},
+                "cover": {"large": "https://covers.openlibrary.org/b/id/42-L.jpg"},
+            }
+        },
+    )
+    response = await client.post(
+        "/api/books/upload", files={"file": ("book.epub", build_epub(), "application/epub+zip")}
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["book"]["open_library"]["edition_id"] == "OL123M"
+    assert data["book"]["open_library"]["cover_id"] == 42
+    assert data["structure"]["schema"] == "standard_book"

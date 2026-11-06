@@ -14,12 +14,14 @@ Run in Docker:
 
 import warnings
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from metabook_py.core.config import settings
+from metabook_py.core.identity import browser_user_id
 from metabook_py.core.version import package_version
 from metabook_py.routers.books import router as books_router
 from metabook_py.routers.documents import router as documents_router
@@ -66,6 +68,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def browser_identity(request, call_next):
+    raw = request.headers.get("X-Metabook-User-ID")
+    owner = None
+    if raw:
+        try:
+            parsed = UUID(raw)
+            if parsed.version != 4:
+                raise ValueError("Expected UUID v4")
+            owner = str(parsed)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid browser user UUID"})
+    token = browser_user_id.set(owner)
+    try:
+        response = await call_next(request)
+        if request.url.path.startswith(
+            ("/api/books/uploads", "/api/books/structure", "/api/documents")
+        ):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Vary"] = ", ".join(
+                filter(None, [response.headers.get("Vary"), "X-Metabook-User-ID"])
+            )
+        return response
+    finally:
+        browser_user_id.reset(token)
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 app.include_router(books_router, prefix="/api")
@@ -86,18 +116,18 @@ async def persistence_error_handler(request, exc: PersistenceError):
 @app.get("/api/health", tags=["meta"])
 @app.get("/health", tags=["meta"], include_in_schema=False)
 async def health() -> dict:
-    """Readiness probe, including configured PostgreSQL connectivity."""
+    """Readiness probe, including the configured persistence provider."""
     from metabook_py.core.cache import book_text_cache
 
-    if settings.database_url:
+    if settings.database_url or settings.mongodb_uri:
         await get_upload_store().check_health()
     return {
         "status": "ok",
         "version": app.version,
         "cache_entries": book_text_cache.size,
-        "persistence": "postgresql"
-        if settings.database_url
-        else ("mongodb" if settings.mongodb_uri else "disabled"),
+        "persistence": "mongodb"
+        if settings.mongodb_uri
+        else ("postgresql" if settings.database_url else "disabled"),
     }
 
 

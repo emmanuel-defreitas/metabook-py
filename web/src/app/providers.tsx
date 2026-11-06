@@ -2,11 +2,13 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { browserUserId } from "@/lib/browser-user";
 import { ToastProvider } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  useEffect(() => { browserUserId(); }, []);
   const [client] = useState(
     () =>
       new QueryClient({

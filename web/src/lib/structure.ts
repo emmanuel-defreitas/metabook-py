@@ -47,7 +47,7 @@ function describe(node: StructureNode, id: string, parent: NodeKind | null, leaf
   const childCount = childArray(node).length;
   const base = { id, raw: node, childCount };
   if (Array.isArray(node.children)) {
-    return { ...base, kind: "section", label: nodeLabel(node, "Section"), meta: plural(num(node.child_count) || childCount, "chapter") + ` · ${plural(num(node.total_words), "word")}${tokens(node, "total_tokens")}` };
+    return { ...base, kind: "section", label: nodeLabel(node, "Section"), meta: (typeof node.paragraph_count === "number" ? plural(node.paragraph_count, "paragraph") : plural(num(node.child_count) || childCount, "chapter")) + ` · ${plural(num(node.total_words), "word")}${tokens(node, "total_tokens")}` };
   }
   if (typeof node.paragraph_count === "number") {
     return { ...base, kind: "chapter", label: nodeLabel(node, "Chapter"), meta: `${plural(num(node.paragraph_count), "paragraph")} · ${plural(num(node.total_words), "word")}${tokens(node, "total_tokens")}` };

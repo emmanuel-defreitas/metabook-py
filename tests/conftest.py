@@ -17,6 +17,7 @@ def isolated_persistence(monkeypatch):
     from metabook_py.core.config import settings
     from metabook_py.services.store import reset_upload_store
 
+    monkeypatch.setattr(settings, "open_library_enabled", False)
     monkeypatch.setattr(settings, "database_url", "")
     monkeypatch.setattr(settings, "mongodb_uri", "")
     reset_upload_store()
