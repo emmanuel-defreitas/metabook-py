@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowCounterClockwiseIcon, CopyIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Reveal } from "@/components/motion/reveal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,12 +11,13 @@ import { COUNT_FIELDS, documentName, FORMAT_LABELS, indexSections, sectionLabel 
 import { formatBytes, formatNumber, formatTimestamp } from "@/lib/format";
 import { plural } from "@/lib/structure";
 import { cn } from "@/lib/utils";
-import { SectionOutline } from "./section-outline";
+import { NodeExplorer } from "@/components/result/node-explorer";
+import { documentExplorerAnalysis } from "@/lib/document";
 
 function Shell({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("rounded-[2rem] bg-foreground/[0.03] p-1.5 ring-1 ring-foreground/6 dark:bg-white/[0.03]", className)}>
-      <div className="h-full rounded-[calc(2rem-0.375rem)] bg-card p-4 shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] sm:p-5 dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]">
+    <div className={cn("rounded-xl bg-foreground/3 p-1.5 ring-1 ring-foreground/6 dark:bg-white/3", className)}>
+      <div className="h-full rounded-xl bg-card p-4 shadow-[inset_0_1px_1px_rgba(255,255,255,0.6)] sm:p-5 dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]">
         {children}
       </div>
     </div>
@@ -59,8 +60,8 @@ function CountsTable({ own, total }: { own?: DocumentCounts; total: DocumentCoun
   );
 }
 
-export function DocumentResult({ result, onReset }: { result: DocumentAnalysis; onReset: () => void }) {
-  const [selected, setSelected] = useState<string | null>(null);
+export function DocumentResult({ result, onResetAction }: { result: DocumentAnalysis; onResetAction: () => void }) {
+  const selected: string | null = null;
   const { document, structure, meta } = result;
   const totals = structure.totals;
   const index = useMemo(() => indexSections(structure.sections), [structure.sections]);
@@ -71,9 +72,17 @@ export function DocumentResult({ result, onReset }: { result: DocumentAnalysis; 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(json);
-      toastManager.add({ title: "Copied JSON", description: `${formatBytes(json.length)} copied to the clipboard.`, type: "success" });
+      toastManager.add({
+        title: "Copied JSON",
+        description: `${formatBytes(json.length)} copied to the clipboard.`,
+        type: "success",
+      });
     } catch {
-      toastManager.add({ title: "Couldn't copy", description: "Clipboard access was blocked by the browser.", type: "error" });
+      toastManager.add({
+        title: "Couldn't copy",
+        description: "Clipboard access was blocked by the browser.",
+        type: "error",
+      });
     }
   };
 
@@ -81,14 +90,19 @@ export function DocumentResult({ result, onReset }: { result: DocumentAnalysis; 
     const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
     const a = Object.assign(window.document.createElement("a"), {
       href: url,
-      download: `${name.replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "document"}.json`,
+      download: `${
+        name
+          .replace(/[^\w-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60) || "document"
+      }.json`,
     });
     a.click();
     URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="book-page flex flex-col gap-6">
       <Reveal className="flex flex-col gap-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="flex min-w-0 max-w-3xl flex-col gap-3">
@@ -97,20 +111,22 @@ export function DocumentResult({ result, onReset }: { result: DocumentAnalysis; 
               {document.page_count != null && <Badge variant="secondary">{plural(document.page_count, "page")}</Badge>}
               <Badge variant="info">{meta.parser === "rust" ? "Rust parser" : "Python parser"}</Badge>
             </div>
-            <h2 className="wrap-anywhere text-balance font-semibold text-3xl leading-[1.08] tracking-[-0.03em] sm:text-4xl">{name}</h2>
+            <h2 className="wrap-anywhere text-balance font-semibold text-3xl leading-[1.08] tracking-[-0.03em] sm:text-4xl">
+              {name}
+            </h2>
             <p className="text-muted-foreground text-sm">
               {formatBytes(document.size_bytes)} · {document.content_type} · analysed in{" "}
               {formatNumber(meta.processing_time_ms)} ms · {formatTimestamp(meta.analyzed_at)}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Button aria-label="Copy JSON" className="rounded-full" onClick={copy} size="icon" variant="ghost">
+            <Button aria-label="Copy JSON" className="rounded-lg" onClick={copy} size="icon" variant="ghost">
               <CopyIcon weight="light" />
             </Button>
-            <Button aria-label="Download JSON" className="rounded-full" onClick={download} size="icon" variant="ghost">
+            <Button aria-label="Download JSON" className="rounded-lg" onClick={download} size="icon" variant="ghost">
               <DownloadSimpleIcon weight="light" />
             </Button>
-            <Button className="rounded-full" onClick={onReset} variant="outline">
+            <Button className="rounded-lg" onClick={onResetAction} variant="outline">
               <ArrowCounterClockwiseIcon weight="light" />
               Another document
             </Button>
@@ -122,23 +138,15 @@ export function DocumentResult({ result, onReset }: { result: DocumentAnalysis; 
           <Stat label="Paragraphs" value={formatNumber(totals.paragraphs)} />
           <Stat label="Sentences" value={formatNumber(totals.sentences)} />
           <Stat label="Words" value={formatNumber(totals.words)} />
-          <Stat label="Links" value={formatNumber(totals.links)} />
+          <Stat label="Clauses" value={totals.clauses == null ? "Rescan needed" : formatNumber(totals.clauses)} />
         </div>
       </Reveal>
 
       <Reveal className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12" delay={0.08}>
-        <Shell className="lg:col-span-7">
-          <div className="mb-3 flex items-baseline justify-between gap-2">
-            <h3 className="font-medium tracking-tight">Outline</h3>
-            <span className="text-subtle-foreground text-xs">Nested by heading level</span>
-          </div>
-          <SectionOutline
-            onSelect={setSelected}
-            sections={structure.sections}
-            selected={selected}
-            totalWords={totals.words}
-          />
-        </Shell>
+        <div className="lg:col-span-12">
+          {structure.sections.some(section => section.paragraphs == null) && <p className="mb-3 text-sm text-muted-foreground">This older scan contains section totals only. Analyse the document again to explore sentences, clauses and words.</p>}
+          <NodeExplorer analysis={documentExplorerAnalysis(result)} fullResult={result} />
+        </div>
         <Shell className="lg:sticky lg:top-24 lg:col-span-5">
           <div className="mb-4 flex flex-col gap-1">
             <span className="text-[10px] text-muted-foreground uppercase tracking-[0.2em]">

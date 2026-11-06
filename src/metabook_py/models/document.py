@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
+from metabook_py.models.structure import ParagraphNode
+
 SCHEMA_VERSION = "1.0"
 
 DocumentFormat = Literal["html", "markdown", "pdf", "text"]
@@ -31,9 +33,14 @@ class Counts(BaseModel):
     links: int = 0
     sentences: int = 0
     words: int = 0
+    clauses: int | None = Field(default=None, exclude_if=lambda value: value is None)
 
     def __add__(self, other: Counts) -> Counts:
-        return Counts(**{k: getattr(self, k) + getattr(other, k) for k in Counts.model_fields})
+        return Counts(**{
+            k: (getattr(self, k) or 0) + (getattr(other, k) or 0)
+            for k in Counts.model_fields
+            if getattr(self, k) is not None or getattr(other, k) is not None
+        })
 
 
 class DocumentTotals(Counts):
@@ -49,6 +56,7 @@ class SectionNode(BaseModel):
     counts: Counts = Field(description="Own content incl. heading, excluding subsections")
     totals: Counts = Field(description="counts plus every descendant section")
     children: list[SectionNode] = Field(default_factory=list)
+    paragraphs: list[ParagraphNode] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class DocumentStructure(BaseModel):
@@ -74,6 +82,7 @@ class DocumentMeta(BaseModel):
 
 
 class DocumentAnalysisResponse(BaseModel):
+    record_id: str | None = None
     document: DocumentInfo
     structure: DocumentStructure
     meta: DocumentMeta

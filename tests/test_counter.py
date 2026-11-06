@@ -177,3 +177,17 @@ class TestBuildScripture:
         nodes, summary = build_structure_tree(text, schema)
         assert summary.total_paragraphs > 0
         assert summary.total_words > 0
+
+
+def test_explicit_paragraph_roles_preserve_counts():
+    from metabook_py.services.counter import _para_node
+
+    illustration = _para_node("[Illustration]", 1, detail="word")
+    assert illustration.role == "illustration"
+    assert illustration.word_count == 1
+    heading = _para_node("CHAPTER XII.", 2)
+    assert heading.role == "heading"
+    assert heading.word_count == 2
+    prose = _para_node("Yes!", 3)
+    assert prose.role is None
+    assert "role" not in prose.model_dump()

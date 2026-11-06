@@ -9,6 +9,8 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Upstream beUI registry source; typechecked, with original hook patterns preserved.
+    "src/vendor/beui/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

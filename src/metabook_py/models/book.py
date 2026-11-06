@@ -15,9 +15,23 @@ class BookInfo(BaseModel):
     subjects: list[str] = Field(default_factory=list)
 
 
+class OpenLibraryMetadata(BaseModel):
+    """External catalog data; never evidence for the parsed structure."""
+
+    match_method: str
+    work_id: str | None = None
+    edition_id: str | None = None
+    cover_id: int | None = None
+    subjects: list[str] = Field(default_factory=list)
+    dewey_decimal: list[str] = Field(default_factory=list)
+    lc_classifications: list[str] = Field(default_factory=list)
+    fetched_at: str
+
+
 class UploadedBookInfo(BaseModel):
     """Metadata extracted from an uploaded EPUB (no Gutenberg ID)."""
 
+    open_library: OpenLibraryMetadata | None = None
     source: str = "upload"
     title: str
     authors: list[AuthorInfo] = Field(default_factory=list)

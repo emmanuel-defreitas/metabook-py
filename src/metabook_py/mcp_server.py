@@ -47,7 +47,7 @@ from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.documents.fetch import fetch_url
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
-from metabook_py.services.preprocessing import preprocess_text
+from metabook_py.services.preprocessing import detect_matter, preprocess_text
 from metabook_py.services.store import get_upload_store, scan_update_doc, upload_doc
 
 EPUB_FETCH_TIMEOUT = 60.0  # seconds, whole download
@@ -151,6 +151,7 @@ async def search_book_structure(
         }
 
     # Preprocess once here; detect and build then skip their own passes.
+    matter = getattr(text, "matter", None)
     text = preprocess_text(text)
     schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
@@ -160,6 +161,7 @@ async def search_book_structure(
     result = {
         "book": book_info.model_dump(),
         "structure": {
+            "matter": matter,
             "schema": schema.name.value,
             "schema_confidence": schema.confidence,
             **schema.explanation(),
@@ -254,6 +256,7 @@ async def upload_book_epub(
     except BlobUploadError as exc:
         return {"error": "blob_upload_failed", "detail": exc.reason}
 
+    matter = detect_matter(parsed.text)
     text = preprocess_text(parsed.text)
     schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
@@ -282,6 +285,7 @@ async def upload_book_epub(
         },
         "blob": {"url": blob.url, "pathname": blob.pathname, "size_bytes": blob.size},
         "structure": {
+            "matter": matter,
             "schema": schema.name.value,
             "schema_confidence": schema.confidence,
             **schema.explanation(),

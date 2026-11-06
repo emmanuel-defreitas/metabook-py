@@ -32,7 +32,7 @@ export function Recents({ filters, query }: { filters: SearchFilters; query: str
     <section aria-labelledby="library-heading" className="flex flex-col gap-8" id="library">
       <div className="flex items-end justify-between gap-4">
         <div className="flex flex-col gap-3">
-          <span className="w-max rounded-full bg-secondary px-3 py-1 font-medium text-[10px] text-muted-foreground uppercase tracking-[0.2em]">
+          <span className="w-max rounded-lg bg-secondary px-3 py-1 font-medium text-[10px] text-muted-foreground uppercase tracking-[0.2em]">
             Library
           </span>
           <h2 className="font-semibold text-3xl tracking-tight sm:text-4xl" id="library-heading">
@@ -41,7 +41,7 @@ export function Recents({ filters, query }: { filters: SearchFilters; query: str
         </div>
         <Button
           aria-label="Reload recents"
-          className="rounded-full"
+          className="rounded-lg"
           loading={library.isFetching}
           onClick={() => library.refetch()}
           size="icon"
@@ -54,7 +54,7 @@ export function Recents({ filters, query }: { filters: SearchFilters; query: str
       {library.isPending ? (
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton className="aspect-[4/3] rounded-[1.75rem]" key={i} />
+            <Skeleton className="aspect-[4/3] rounded-xl" key={i} />
           ))}
         </div>
       ) : library.isError ? (
@@ -68,16 +68,16 @@ export function Recents({ filters, query }: { filters: SearchFilters; query: str
           </AlertAction>
         </Alert>
       ) : books.length === 0 ? (
-        <Empty className="rounded-[2rem] border border-dashed py-16">
+        <Empty className="rounded-xl border border-dashed py-16">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <BooksIcon weight="light" />
             </EmptyMedia>
-            <EmptyTitle>{library.data?.length ? "No saved books match" : "No saved books yet"}</EmptyTitle>
+            <EmptyTitle>{library.data?.length ? "No saved items match" : "No saved items yet"}</EmptyTitle>
             <EmptyDescription>
               {library.data?.length
-                ? "Change the filters, or pick Upload as the source to see saved EPUBs."
-                : "Search the catalog and choose Schema, or drop an EPUB above."}
+                ? "Change the filters to see your saved books and documents."
+                : "Search the catalog and choose Schema, or upload a file from Home."}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

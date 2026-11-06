@@ -49,12 +49,14 @@ from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.errors import CollectionInvalid, PyMongoError
 
 from metabook_py.core.config import settings
+from metabook_py.core.identity import browser_user_id
 from metabook_py.models.book import BlobInfo, BookInfo, UploadedBookInfo
 from metabook_py.models.structure import StructureSummary
 from metabook_py.services.blob import BlobResult
 from metabook_py.services.detector import DetectedSchema
-from metabook_py.services.postgres import PostgresUploadStore
+from metabook_py.services.postgres import PersistenceError, PostgresUploadStore
 from metabook_py.services.tokenizers import TokenEncoder
+from metabook_py.services.user_library import UserLibraryStore
 
 logger = logging.getLogger(__name__)
 
@@ -342,15 +344,19 @@ class UploadStore:
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
 
-_store: UploadStore | PostgresUploadStore | None = None
+_store: UploadStore | PostgresUploadStore | UserLibraryStore | None = None
 
 
-def get_upload_store() -> UploadStore | PostgresUploadStore:
+def get_upload_store() -> UploadStore | PostgresUploadStore | UserLibraryStore:
     """Lazily build the process-wide store from current settings."""
     global _store
+    if browser_user_id.get() and not settings.mongodb_uri:
+        raise PersistenceError("MongoDB is not configured for browser libraries")
     if _store is None:
         _store = (
-            PostgresUploadStore(settings.database_url, settings.default_user_id)
+            UserLibraryStore(settings.mongodb_uri, settings.mongodb_db)
+            if settings.mongodb_uri
+            else PostgresUploadStore(settings.database_url, settings.default_user_id)
             if settings.database_url
             else UploadStore(settings.mongodb_uri, settings.mongodb_db)
         )

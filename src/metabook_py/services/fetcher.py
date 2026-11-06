@@ -21,7 +21,7 @@ import httpx
 from metabook_py.core.cache import book_text_cache
 from metabook_py.core.config import settings
 from metabook_py.core.exceptions import TextUnavailableError
-from metabook_py.services.preprocessing import preprocess_text, strip_boilerplate
+from metabook_py.services.preprocessing import detect_matter, preprocess_text, strip_boilerplate
 
 # ── Rate-limit state (module-level, shared within the process) ─────────────────
 _fetch_lock = asyncio.Lock()
@@ -82,6 +82,17 @@ async def _rate_limited_get(url: str) -> str:
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
+class BookText(str):
+    """Cleaned body plus text and counts for explicitly excluded publication regions."""
+
+    matter: list[dict]
+
+    def __new__(cls, text: str, matter: list[dict]):
+        obj = super().__new__(cls, text)
+        obj.matter = matter
+        return obj
+
+
 async def fetch_book_text(
     gutenberg_id: int,
     download_url: str,
@@ -101,21 +112,23 @@ async def fetch_book_text(
     ------
     TextUnavailableError — fetch failure OR empty text after cleaning
     """
-    cache_key = f"book_text:{gutenberg_id}"
+    cache_key = f"book_text:v4:{gutenberg_id}:{int(is_html)}"
 
     cached = await book_text_cache.get(cache_key)
     if cached is not None:
-        return cached, True
+        return BookText(cached["text"], cached["matter"]), True
 
     try:
         raw = await _rate_limited_get(download_url)
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
         raise TextUnavailableError(gutenberg_id=gutenberg_id) from exc
 
-    text = _normalise(raw, is_html=is_html)
+    source = _strip_html(raw) if is_html else raw
+    matter = detect_matter(source)
+    text = preprocess_text(source)
 
     if not text:
         raise TextUnavailableError(gutenberg_id=gutenberg_id)
 
-    await book_text_cache.set(cache_key, text)
-    return text, False
+    await book_text_cache.set(cache_key, {"text": text, "matter": matter})
+    return BookText(text, matter), False

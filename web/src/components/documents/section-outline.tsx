@@ -16,12 +16,12 @@ export function SectionOutline({
   sections,
   totalWords,
   selected,
-  onSelect,
+  onSelectAction,
 }: {
   sections: SectionNode[];
   totalWords: number;
   selected: string | null;
-  onSelect: (path: string | null) => void;
+  onSelectAction: (path: string | null) => void;
 }) {
   const [expanded, setExpanded] = useState(() => defaultExpanded(sections));
 
@@ -34,11 +34,7 @@ export function SectionOutline({
     });
 
   if (!sections.length) {
-    return (
-      <p className="py-10 text-center text-sm text-subtle-foreground">
-        No sections were found in this document.
-      </p>
-    );
+    return <p className="py-10 text-center text-sm text-subtle-foreground">No sections were found in this document.</p>;
   }
 
   const rows = (nodes: SectionNode[], depth: number): React.ReactNode =>
@@ -47,7 +43,12 @@ export function SectionOutline({
       const share = totalWords ? node.totals.words / totalWords : 0;
       const isSelected = selected === node.path;
       return (
-        <li aria-expanded={node.children.length ? open : undefined} key={node.path} role="treeitem" aria-selected={isSelected}>
+        <li
+          aria-expanded={node.children.length ? open : undefined}
+          key={node.path}
+          role="treeitem"
+          aria-selected={isSelected}
+        >
           <div
             className={cn(
               "group flex items-center gap-1 rounded-xl pe-2 transition-colors duration-300 ease-spring",
@@ -72,7 +73,7 @@ export function SectionOutline({
             )}
             <button
               className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-2 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => onSelect(isSelected ? null : node.path)}
+              onClick={() => onSelectAction(isSelected ? null : node.path)}
               type="button"
             >
               <span
@@ -94,9 +95,9 @@ export function SectionOutline({
                 )}
               </span>
               <span className="hidden w-24 shrink-0 sm:block" aria-hidden>
-                <span className="block h-1 overflow-hidden rounded-full bg-foreground/6">
+                <span className="block h-1 overflow-hidden rounded-lg bg-foreground/6">
                   <span
-                    className="block h-full rounded-full bg-primary/70"
+                    className="block h-full rounded-lg bg-primary/70"
                     style={{ width: `${Math.max(share * 100, share > 0 ? 2 : 0)}%` }}
                   />
                 </span>

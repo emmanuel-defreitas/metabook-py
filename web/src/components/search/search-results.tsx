@@ -20,9 +20,9 @@ import { CatalogSearch } from "./catalog-search";
 export function SearchResultsSkeleton() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 pt-12 sm:px-8">
-      <Skeleton className="h-10 rounded-full" />
+      <Skeleton className="h-10 rounded-lg" />
       {Array.from({ length: 5 }, (_, i) => (
-        <Skeleton className="h-24 rounded-[1.5rem]" key={i} />
+        <Skeleton className="h-24 rounded-xl" key={i} />
       ))}
     </div>
   );
@@ -51,9 +51,9 @@ function ResultRow({ result, score }: { result: CatalogResult; score: number | n
             <SchemaScore compact score={score} />
           </div>
         )}
-        <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-secondary ps-3 pe-1 font-medium text-sm transition-colors duration-300 ease-spring group-hover:bg-primary group-hover:text-primary-foreground">
+        <span className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-secondary ps-3 pe-1 font-medium text-sm transition-colors duration-300 ease-spring group-hover:bg-primary group-hover:text-primary-foreground">
           {isGutenberg ? "Schema" : "Open record"}
-          <span className="flex size-6 items-center justify-center rounded-full bg-foreground/5 transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px dark:bg-white/10">
+          <span className="flex size-6 items-center justify-center rounded-lg bg-foreground/5 transition-transform duration-500 ease-spring group-hover:translate-x-0.5 group-hover:-translate-y-px dark:bg-white/10">
             {isGutenberg ? <TreeStructureIcon weight="light" /> : <ArrowUpRightIcon weight="light" />}
           </span>
         </span>
@@ -61,7 +61,7 @@ function ResultRow({ result, score }: { result: CatalogResult; score: number | n
     </>
   );
   const className =
-    "group flex items-center gap-4 rounded-[1.5rem] bg-card px-5 py-4 outline-none ring-1 ring-foreground/6 transition-[box-shadow,scale] duration-500 ease-spring hover:shadow-[0_18px_40px_-28px_rgba(15,18,23,0.35)] focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.995]";
+    "group flex items-center gap-4 rounded-xl bg-card px-5 py-4 outline-none ring-1 ring-foreground/6 transition-[box-shadow,scale] duration-500 ease-spring hover:shadow-[0_18px_40px_-28px_rgba(15,18,23,0.35)] focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.995]";
   if (isGutenberg) {
     return (
       <Link className={className} href={`/gutenberg/${result.gutenberg_id}`}>
@@ -130,7 +130,7 @@ function Results({ params }: { params: URLSearchParams }) {
       ) : search.isPending ? (
         <div className="flex flex-col gap-3">
           {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton className="h-22 rounded-[1.5rem]" key={i} />
+            <Skeleton className="h-22 rounded-xl" key={i} />
           ))}
         </div>
       ) : search.isError ? (
@@ -164,7 +164,7 @@ function Results({ params }: { params: URLSearchParams }) {
           {(search.data.previous_page || search.data.next_page) && (
             <nav aria-label="Result pages" className="flex items-center justify-between gap-2">
               <Button
-                className="rounded-full"
+                className="rounded-lg"
                 disabled={!search.data.previous_page}
                 onClick={() => search.data.previous_page && goTo(search.data.previous_page)}
                 variant="outline"
@@ -173,7 +173,7 @@ function Results({ params }: { params: URLSearchParams }) {
                 Previous
               </Button>
               <Button
-                className="rounded-full"
+                className="rounded-lg"
                 disabled={!search.data.next_page}
                 onClick={() => search.data.next_page && goTo(search.data.next_page)}
                 variant="outline"
