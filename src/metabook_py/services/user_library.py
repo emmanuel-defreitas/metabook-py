@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from gridfs import AsyncGridFSBucket
@@ -16,7 +17,9 @@ from metabook_py.services.postgres import PersistenceError
 class UserLibraryStore:
     def __init__(self, uri: str, db_name: str):
         self.enabled = bool(uri)
-        self.client = AsyncMongoClient(uri, serverSelectionTimeoutMS=5000)
+        self.client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            uri, serverSelectionTimeoutMS=5000
+        )
         self.db = self.client[db_name]
         self.collection = self.db.user_library
         self.bucket = AsyncGridFSBucket(self.db, bucket_name="parsed_results")

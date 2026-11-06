@@ -24,6 +24,7 @@ from metabook_py.core.identity import browser_user_id
 from metabook_py.models.document import AnalyzeUrlRequest, DocumentAnalysisResponse
 from metabook_py.services.documents.service import analyze_document, analyze_document_url
 from metabook_py.services.store import get_upload_store
+from metabook_py.services.user_library import UserLibraryStore
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -69,6 +70,15 @@ _DOC_ERRORS = (
 )
 
 
+async def _save_to_library(result: DocumentAnalysisResponse) -> None:
+    """Save the result to the caller's browser library, when there is one."""
+    if not browser_user_id.get():
+        return
+    store = get_upload_store()  # raises when MongoDB is not configured
+    if isinstance(store, UserLibraryStore):
+        result.record_id = await store.record_document(result)
+
+
 @router.post(
     "/analyze",
     response_model=DocumentAnalysisResponse,
@@ -92,8 +102,7 @@ async def analyze_upload(
         result = await run_in_threadpool(
             analyze_document, data, content_type=file.content_type, filename=file.filename, detail=detail
         )
-        if browser_user_id.get():
-            result.record_id = await get_upload_store().record_document(result)
+        await _save_to_library(result)
         return result
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc
@@ -118,8 +127,7 @@ async def analyze_url(body: AnalyzeUrlRequest, detail: bool = False) -> Document
     """
     try:
         result = await analyze_document_url(str(body.url), detail=detail)
-        if browser_user_id.get():
-            result.record_id = await get_upload_store().record_document(result)
+        await _save_to_library(result)
         return result
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc

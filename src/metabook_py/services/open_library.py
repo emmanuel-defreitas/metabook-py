@@ -5,6 +5,7 @@ import re
 import time
 import unicodedata
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
@@ -79,7 +80,7 @@ async def _get(params: dict) -> dict:
 
 async def _lookup(book: UploadedBookInfo) -> UploadedBookInfo:
     isbn = _isbn(book.isbn)
-    fields = {}
+    fields: dict[str, Any] = {}
     if isbn:
         key = f"ISBN:{isbn}"
         data = (await _get({"bibkeys": key, "format": "json", "jscmd": "data"})).get(key)
