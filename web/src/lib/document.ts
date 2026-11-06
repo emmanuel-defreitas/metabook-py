@@ -14,6 +14,7 @@ export const COUNT_FIELDS: { key: keyof DocumentCounts; label: string }[] = [
   { key: "headings", label: "Headings" },
   { key: "paragraphs", label: "Paragraphs" },
   { key: "sentences", label: "Sentences" },
+  { key: "clauses", label: "Clauses" },
   { key: "words", label: "Words" },
   { key: "lists", label: "Lists" },
   { key: "list_items", label: "List items" },
@@ -85,4 +86,28 @@ export function normalizeUrl(raw: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Adapt positional document sections to the shared explorer without inventing child data. */
+export function documentExplorerAnalysis(result: DocumentAnalysis): import("./api/types").Analysis {
+  const convert = (section: SectionNode): import("./api/types").StructureNode => ({
+    has_heading: section.kind !== "preamble", total_clauses: section.totals.clauses,
+    label: sectionLabel(section), level: "section", index: section.index,
+    paragraph_count: section.totals.paragraphs, total_sentences: section.totals.sentences,
+    total_words: section.totals.words,
+    children: [...(section.paragraphs ?? []), ...section.children.map(convert)],
+  });
+  const t = result.structure.totals;
+  return {
+    book: { title: documentName(result), authors: [], language: "", subjects: [] },
+    meta: { processing_time_ms: result.meta.processing_time_ms },
+    structure: { schema: "document", schema_confidence: "", schema_score: 0,
+      schema_evidence: {}, schema_candidates: {}, schema_overridden: false,
+      summary: { total_top_level_nodes: result.structure.sections.length, total_paragraphs: t.paragraphs,
+        total_sentences: t.sentences, total_words: t.words, avg_paragraphs_per_chapter: 0,
+        avg_sentences_per_paragraph: t.paragraphs ? t.sentences / t.paragraphs : 0,
+        avg_words_per_sentence: t.sentences ? t.words / t.sentences : 0 },
+      nodes: result.structure.sections.map(convert),
+    },
+  };
 }

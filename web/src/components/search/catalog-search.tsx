@@ -10,6 +10,7 @@ import { SearchField } from "./search-field";
 
 /** Search field + shared filters. Enter submits an owned snapshot to /search. */
 export function CatalogSearch({
+  libraryOnly = false,
   initialQuery = "",
   filters,
   onFiltersChange,
@@ -17,6 +18,7 @@ export function CatalogSearch({
   size = "default",
   className,
 }: {
+  libraryOnly?: boolean;
   initialQuery?: string;
   filters: SearchFilters;
   onFiltersChange: (filters: SearchFilters) => void;
@@ -33,6 +35,7 @@ export function CatalogSearch({
   );
 
   const submit = () => {
+    if (libraryOnly) return;
     const params = filtersToParams(filters);
     params.set("q", query.trim());
     router.push(`/search?${params}`);
@@ -51,6 +54,7 @@ export function CatalogSearch({
         value={query}
       />
       <FilterBar
+        libraryOnly={libraryOnly}
         categories={categories}
         className={cn(size === "hero" && "justify-center")}
         filters={filters}

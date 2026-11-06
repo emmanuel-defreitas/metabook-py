@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass, field
 
 from metabook_py.models.document import Counts, DocumentTotals, SectionNode
+from metabook_py.models.structure import ParagraphNode
+from metabook_py.services.counter import _para_node
 from metabook_py.services.documents.blocks import Block, BlockType
 from metabook_py.services.textstats import count_sentences, count_words
 
@@ -112,21 +114,30 @@ def _tally(block: Block, acc: dict[str, int]) -> None:
 
 
 def count_blocks(blocks: list[Block]) -> Counts:
-    acc = dict.fromkeys(Counts.model_fields, 0)
+    acc = dict.fromkeys((key for key in Counts.model_fields if key != "clauses"), 0)
     for block in blocks:
         _tally(block, acc)
     return Counts(**acc)
 
 
-def _to_node(section: _Section, index: int, parent_path: str) -> tuple[SectionNode, int, int]:
+def _to_node(section: _Section, index: int, parent_path: str, detail: bool = False) -> tuple[SectionNode, int, int]:
     """Return (node, section_count, depth) for *section* and its subtree."""
     own = count_blocks(([section.heading] if section.heading else []) + section.blocks)
+    paragraphs: list[ParagraphNode] = []
+    if detail:
+        def collect(blocks: list[Block]) -> None:
+            for block in blocks:
+                if block.type in _PROSE and block.text.strip():
+                    paragraphs.append(_para_node(block.text, len(paragraphs) + 1, detail="word"))
+                collect(block.children)
+        collect(section.blocks)
+        own.clauses = sum(s.clause_count for p in paragraphs for s in (p.sentences or []))
     path = "0" if section.heading is None else f"{parent_path}{index}"
     children: list[SectionNode] = []
     totals = own
     n_sections, depth = 1, 1
     for i, child in enumerate(section.children):
-        node, n, d = _to_node(child, i + 1, f"{path}.")
+        node, n, d = _to_node(child, i + 1, f"{path}.", detail)
         children.append(node)
         totals = totals + node.totals
         n_sections += n
@@ -139,6 +150,7 @@ def _to_node(section: _Section, index: int, parent_path: str) -> tuple[SectionNo
         counts=own,
         totals=totals,
         children=children,
+        paragraphs=paragraphs if detail else None,
     )
     return node, n_sections, depth
 
@@ -146,7 +158,7 @@ def _to_node(section: _Section, index: int, parent_path: str) -> tuple[SectionNo
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
-def build_document_structure(blocks: list[Block]) -> tuple[list[SectionNode], DocumentTotals]:
+def build_document_structure(blocks: list[Block], *, detail: bool = False) -> tuple[list[SectionNode], DocumentTotals]:
     sections = _assemble(blocks)
     _classify(sections)
     nodes: list[SectionNode] = []
@@ -157,7 +169,7 @@ def build_document_structure(blocks: list[Block]) -> tuple[list[SectionNode], Do
     for section in sections:
         if section.heading is not None:
             ordinal += 1
-        node, n, d = _to_node(section, ordinal, "")
+        node, n, d = _to_node(section, ordinal, "", detail)
         nodes.append(node)
         totals = totals + node.totals
         n_sections += n

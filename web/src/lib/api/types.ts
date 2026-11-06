@@ -1,5 +1,5 @@
 // Wire types for the Book Structure API (src/metabook_py/models/*).
-// Responses carry positions and counts only, never book text.
+// Main-content nodes carry positions and counts; excluded publication matter may include text.
 
 export interface Author {
   name: string;
@@ -19,6 +19,16 @@ export interface BookInfo {
   license?: string | null;
   date?: string | null;
   number_of_pages?: number | null;
+  open_library?: {
+    match_method: "isbn" | "title_author";
+    work_id: string | null;
+    edition_id: string | null;
+    cover_id: number | null;
+    subjects: string[];
+    dewey_decimal: string[];
+    lc_classifications: string[];
+    fetched_at: string;
+  } | null;
 }
 
 export interface BlobInfo {
@@ -42,7 +52,18 @@ export interface StructureSummary {
 /** Any node in the tree; shape depends on its depth and the schema. */
 export type StructureNode = Record<string, unknown>;
 
+export interface MatterRegion {
+  text?: string;
+  position: "front" | "back";
+  kind: string;
+  evidence: string;
+  start: number;
+  end: number;
+  word_count: number;
+}
+
 export interface StructureDetail {
+  matter?: MatterRegion[] | null;
   schema: string;
   schema_confidence: string;
   schema_score: number;
@@ -91,6 +112,7 @@ export interface ScanInfo {
 
 /** One saved book from GET /api/books/uploads. */
 export interface UploadRecord {
+  kind?: "book" | "document";
   id: string;
   source: string;
   gutenberg_id?: number | null;
@@ -132,6 +154,7 @@ export interface CatalogPage {
 export type DocumentFormat = "html" | "markdown" | "pdf" | "text";
 
 export interface DocumentCounts {
+  clauses?: number;
   headings: number;
   paragraphs: number;
   lists: number;
@@ -160,9 +183,11 @@ export interface SectionNode {
   counts: DocumentCounts;
   totals: DocumentCounts;
   children: SectionNode[];
+  paragraphs?: StructureNode[];
 }
 
 export interface DocumentAnalysis {
+  record_id?: string | null;
   document: {
     format: DocumentFormat;
     content_type: string;

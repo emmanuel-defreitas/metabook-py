@@ -228,6 +228,7 @@ class PostgresUploadStore:
             cur = await conn.execute(
                 """SELECT b.*, m.title, m.language, m.subjects, m.isbn, m.date, m."numberOfPage",
                           p.name AS publisher, l.name AS license, s.scan,
+                          s.result->'book'->'open_library' AS open_library,
                           COALESCE((SELECT jsonb_agg(jsonb_build_object('name', a.name,
                             'birth_year', a.birth_year, 'death_year', a.death_year) ORDER BY ma.position)
                             FROM metadata_authors ma JOIN author a ON a.id=ma."authorId"
@@ -261,7 +262,7 @@ class PostgresUploadStore:
                         "date",
                     )
                 }
-                | {"number_of_pages": row["numberOfPage"]},
+                | {"number_of_pages": row["numberOfPage"], "open_library": row.get("open_library")},
                 "scan": row["scan"] or {"scanned": False},
                 "created_at": row["createdAt"],
                 "updated_at": row["updatedAt"],

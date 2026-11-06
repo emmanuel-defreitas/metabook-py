@@ -1,12 +1,13 @@
 // Browser client for the Book Structure API, served from the same origin
 // under /api (Vercel services in production, a Next.js rewrite in dev).
 
+import { browserUserId } from "@/lib/browser-user";
 import type { Analysis, CatalogPage, DocumentAnalysis, UploadRecord } from "./types";
 
 const BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "").replace(/\/$/, "");
 
 /** Scan settings shared with the desktop client. */
-export const SCAN_DETAIL = "sentence";
+export const SCAN_DETAIL = "word";
 export const SCAN_TOKENIZER = "bert-base-uncased";
 
 export class ApiError extends Error {
@@ -80,7 +81,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${BASE}${path}`, {
       ...init,
-      headers: { Accept: "application/json", ...init?.headers },
+      headers: { Accept: "application/json", "X-Metabook-User-ID": browserUserId(), ...init?.headers },
+      cache: "no-store",
     });
   } catch (error) {
     if (init?.signal?.aborted) throw error;
@@ -160,17 +162,16 @@ export function listLibrary(signal?: AbortSignal): Promise<UploadRecord[]> {
   return request<UploadRecord[]>("/api/books/uploads?limit=200", { signal });
 }
 
-export async function openSaved(id: string, signal?: AbortSignal): Promise<Analysis> {
-  return validAnalysis(
-    await request<Analysis>(`/api/books/uploads/${encodeURIComponent(id)}/structure`, { signal }),
-  );
+export async function openSaved(id: string, signal?: AbortSignal): Promise<Analysis | DocumentAnalysis> {
+  const result = await request<Analysis | DocumentAnalysis>(`/api/books/uploads/${encodeURIComponent(id)}/structure`, { signal });
+  return "document" in result ? validDocument(result) : validAnalysis(result);
 }
 
-export async function analyseGutenberg(id: number, signal?: AbortSignal): Promise<Analysis> {
+export async function analyseGutenberg(id: number, signal?: AbortSignal, detail: string = SCAN_DETAIL): Promise<Analysis> {
   const params = new URLSearchParams({
     gutenberg_id: String(id),
     include_paragraphs: "true",
-    detail: SCAN_DETAIL,
+    detail,
     tokenizer: SCAN_TOKENIZER,
     language: "",
   });
@@ -180,6 +181,7 @@ export async function analyseGutenberg(id: number, signal?: AbortSignal): Promis
 export interface UploadProgress {
   loaded: number;
   total: number;
+  phase?: "uploading" | "processing";
 }
 
 /** Multipart upload over XHR, so the real request bytes can be reported. */
@@ -193,9 +195,11 @@ function uploadFile<T>(
   const promise = new Promise<T>((resolve, reject) => {
     xhr.open("POST", `${BASE}${path}`);
     xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("X-Metabook-User-ID", browserUserId());
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress({ loaded: event.loaded, total: event.total });
     };
+    xhr.upload.onload = () => onProgress({ loaded: file.size, total: file.size, phase: "processing" });
     xhr.onerror = () =>
       reject(new ApiError("Couldn't reach the API. Check your connection and try again.", 0));
     xhr.onabort = () => reject(new ApiError("Upload cancelled.", 0));
@@ -246,13 +250,18 @@ function validDocument(value: DocumentAnalysis): DocumentAnalysis {
   return value;
 }
 
+export const DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+
 export function uploadDocument(file: File, onProgress: (progress: UploadProgress) => void) {
-  return uploadFile<DocumentAnalysis>("/api/documents/analyze", file, onProgress, validDocument);
+  if (file.size > DOCUMENT_MAX_BYTES) {
+    return { promise: Promise.reject(new ApiError("That file exceeds the 20 MB limit. Choose a smaller document.", 413)), abort: () => {} };
+  }
+  return uploadFile<DocumentAnalysis>("/api/documents/analyze?detail=true", file, onProgress, validDocument);
 }
 
 export async function analyseDocumentUrl(url: string, signal?: AbortSignal): Promise<DocumentAnalysis> {
   return validDocument(
-    await request<DocumentAnalysis>("/api/documents/analyze-url", {
+    await request<DocumentAnalysis>("/api/documents/analyze-url?detail=true", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),

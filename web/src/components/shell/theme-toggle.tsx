@@ -15,7 +15,7 @@ export function ThemeToggle() {
         render={
           <Button
             aria-label="Toggle theme"
-            className="rounded-full"
+            className="rounded-lg"
             onClick={() => setTheme(next)}
             size="icon"
             variant="ghost"
