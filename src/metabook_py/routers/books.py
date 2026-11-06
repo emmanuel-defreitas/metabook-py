@@ -39,6 +39,7 @@ from metabook_py.models.book import (
     UploadedBookInfo,
 )
 from metabook_py.models.catalog import CatalogSearchResponse
+from metabook_py.models.document import DocumentAnalysisResponse
 from metabook_py.models.structure import (
     BookStructureResponse,
     BookUploadResponse,
@@ -55,7 +56,8 @@ from metabook_py.services.detector import SCHEMA_DEFINITIONS, SchemaType, detect
 from metabook_py.services.discovery import GutendexClient
 from metabook_py.services.epub import parse_epub
 from metabook_py.services.fetcher import fetch_book_text
-from metabook_py.services.preprocessing import preprocess_text
+from metabook_py.services.open_library import enrich_uploaded_book
+from metabook_py.services.preprocessing import detect_matter, preprocess_text
 from metabook_py.services.store import (
     get_upload_store,
     scan_update_doc,
@@ -363,6 +365,7 @@ async def get_book_structure(
 
     # ── 3. Detect schema ───────────────────────────────────────────────────────
     # Preprocess once here; detect and build then skip their own passes.
+    matter = getattr(text, "matter", None)
     text = preprocess_text(text)
     schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
 
@@ -381,6 +384,7 @@ async def get_book_structure(
     response = BookStructureResponse(
         book=book_info,
         structure=StructureDetail(
+            matter=matter,
             **{"schema": schema.name.value, **schema.explanation()},
             schema_confidence=schema.confidence,
             summary=summary,
@@ -472,6 +476,7 @@ async def upload_book(
         ) from exc
 
     # ── 3. Detect schema + build metadata tree ─────────────────────────────────
+    matter = detect_matter(parsed.text)
     text = preprocess_text(parsed.text)
     schema = detect_schema(text, schema_override=schema_override, preprocessed=True)
     nodes, summary = build_structure_tree(
@@ -494,6 +499,7 @@ async def upload_book(
         date=parsed.metadata.date,
         number_of_pages=parsed.metadata.number_of_pages,
     )
+    uploaded_book = await enrich_uploaded_book(uploaded_book)
     blob_info = BlobInfo(url=blob.url, pathname=blob.pathname, size_bytes=blob.size)
 
     processing_ms = int((time.monotonic() - t0) * 1000)
@@ -502,6 +508,7 @@ async def upload_book(
         book=uploaded_book,
         blob=blob_info,
         structure=StructureDetail(
+            matter=matter,
             **{"schema": schema.name.value, **schema.explanation()},
             schema_confidence=schema.confidence,
             summary=summary,
@@ -515,7 +522,7 @@ async def upload_book(
         ),
     )
     # PostgreSQL commits relationships and the public structural result together.
-    # MongoDB retains its historical summary-only representation.
+    # MongoDB stores the complete result separately in GridFS.
     doc = upload_doc(uploaded_book, blob, schema, detail, summary, encoder)
     doc["result"] = response.model_dump(mode="json", by_alias=True)
     response.record_id = await get_upload_store().record_upload(doc)
@@ -530,25 +537,25 @@ async def upload_book(
 async def list_uploads(
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
     source: str | None = Query(
-        None, description="Filter by origin: gutenberg | upload", pattern="^(gutenberg|upload)$"
+        None, description="Filter by origin: gutenberg | upload", pattern="^(gutenberg|upload|document)$"
     ),
 ) -> list[UploadRecord]:
     """
     List the persisted library — one record per book
     uploaded or selected from search results, newest first. Each carries the
     book metadata, the Vercel Blob link (uploads), and the current scan state
-    (scanned, scope, schema, total tokens). PostgreSQL uses DATABASE_URL;
-    historical MongoDB storage uses MONGODB_URI. Unconfigured storage returns [].
+    (scanned, scope, schema, total tokens). Browser libraries use MONGODB_URI
+    and are scoped by X-Metabook-User-ID.
     """
     docs = await get_upload_store().list_uploads(limit=limit, source=source)
     return [UploadRecord.model_validate(doc) for doc in docs]
 
 
 @router.get(
-    "/uploads/{book_id}/structure", response_model=BookUploadResponse | BookStructureResponse
+    "/uploads/{book_id}/structure", response_model=BookUploadResponse | BookStructureResponse | DocumentAnalysisResponse
 )
 async def stored_structure(book_id: str):
-    """Open a committed scan from PostgreSQL without fetching or exposing book text."""
+    """Open an owned saved book or document without another parse."""
     result = await get_upload_store().get_result(book_id)
     if result is None:
         raise HTTPException(404, detail={"error": "saved_result_not_found"})

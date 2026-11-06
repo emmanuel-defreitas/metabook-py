@@ -29,7 +29,7 @@ export const KIND_OPTIONS: Option[] = [
 export const SOURCE_OPTIONS: Option[] = [
   { value: "gutendex", label: "Gutendex" },
   { value: "openalex", label: "OpenAlex" },
-  { value: "upload", label: "Upload", note: "Saved EPUBs only" },
+  { value: "upload", label: "Upload", note: "Saved books and documents" },
   { value: "kindle", label: "Kindle", note: "Not connected yet", disabled: true },
 ];
 
@@ -112,6 +112,7 @@ function sourceKey(source: unknown): string | null {
     case "gutenberg":
     case "gutendex":
       return "gutendex";
+    case "document":
     case "upload":
       return "upload";
     case "openalex":

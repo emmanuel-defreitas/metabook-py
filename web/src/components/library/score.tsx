@@ -1,3 +1,6 @@
+"use client";
+
+import { Tooltip, TooltipTrigger, TooltipPopup } from "@/components/ui/tooltip";
 import { Meter, MeterIndicator, MeterLabel, MeterTrack, MeterValue } from "@/components/ui/meter";
 
 /**
@@ -9,6 +12,8 @@ export function SchemaScore({ score, compact }: { score: number | null | undefin
     return <span className="text-subtle-foreground text-xs">Score unavailable</span>;
   }
   return (
+    <Tooltip>
+    <TooltipTrigger render={<div tabIndex={0} className="w-full outline-none focus-visible:ring-2 focus-visible:ring-ring" />} aria-label="About schema support">
     <Meter
       className={compact ? "w-24 gap-1" : "w-full gap-1.5"}
       format={{ style: "percent", maximumFractionDigits: 0 }}
@@ -22,9 +27,14 @@ export function SchemaScore({ score, compact }: { score: number | null | undefin
         </MeterLabel>
         <MeterValue className="font-medium text-xs tabular-nums" />
       </div>
-      <MeterTrack className="h-1 rounded-full">
+      <MeterTrack className="h-1 rounded-lg">
         <MeterIndicator className="bg-mark" />
       </MeterTrack>
     </Meter>
+    </TooltipTrigger>
+    <TooltipPopup className="max-w-72">
+      <p className="p-2 leading-relaxed">Schema support measures how strongly structural clues, such as chapter headings and verse markers, support the detected book layout. {Math.round(score * 100)}% is a heuristic score, not the percentage parsed or a probability of correctness.</p>
+    </TooltipPopup>
+    </Tooltip>
   );
 }

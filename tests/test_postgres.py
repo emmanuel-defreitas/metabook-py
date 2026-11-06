@@ -81,6 +81,7 @@ async def postgres_store():
 @pytest.mark.integration
 async def test_upload_relationships_result_and_reconnect(postgres_store):
     doc = upload_fixture()
+    doc["result"]["book"]["open_library"] = {"edition_id": "OL123M", "cover_id": 42}
     key = await postgres_store.record_upload(doc)
     # New store/connection demonstrates committed storage, not process memory.
     reopened = PostgresUploadStore(postgres_store._uri, schema=postgres_store._schema)
@@ -88,6 +89,7 @@ async def test_upload_relationships_result_and_reconnect(postgres_store):
     assert result == {**doc["result"], "record_id": key}
     assert result["structure"]["nodes"][0]["paragraphs"][0]["sentences"]
     records = await reopened.list_uploads(source="upload", limit=1)
+    assert records[0]["book"]["open_library"] == doc["result"]["book"]["open_library"]
     assert records[0]["id"] == key
     assert [a["name"] for a in records[0]["book"]["authors"]] == ["Jane Austen", "Second Author"]
     assert records[0]["book"]["publisher"] == "Test Publisher"

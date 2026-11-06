@@ -1347,11 +1347,11 @@ wheels = [
 [[package]]
 name = "metabook-core"
 version = "0.1.0"
-source = { directory = "rust/metabook_core" }
+source = { directory = "src/metabook_core" }
 
 [[package]]
 name = "metabook-py"
-version = "3.1.1"
+version = "3.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1393,7 +1393,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "huggingface-hub", specifier = ">=0.26.0" },
-    { name = "metabook-core", marker = "extra == 'rust'", directory = "rust/metabook_core" },
+    { name = "metabook-core", marker = "extra == 'rust'", directory = "src/metabook_core" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pydantic-settings", specifier = ">=2.3.0" },

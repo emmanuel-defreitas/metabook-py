@@ -1,5 +1,5 @@
 # ── Stage 1: native parsing core wheel (Rust + maturin) ───────────────────────
-# Builds rust/metabook_core into an abi3 wheel. The Rust toolchain is copied
+# Builds src/metabook_core into an abi3 wheel. The Rust toolchain is copied
 # from the official image so the slim Python base keeps its matching glibc.
 FROM python:3.13-slim AS rust-builder
 
@@ -15,7 +15,7 @@ RUN apt-get update \
     && pip install --no-cache-dir "maturin>=1.8,<2"
 
 WORKDIR /build
-COPY rust/metabook_core/ ./
+COPY src/metabook_core/ ./
 RUN maturin build --release --out /wheels
 
 

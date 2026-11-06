@@ -102,16 +102,16 @@ def _block_tuple(block: Block) -> tuple:
     return (str(block.type), block.text, block.level, [_block_tuple(c) for c in block.children])
 
 
-def build_structure(fmt: DocumentFormat, data: bytes) -> tuple[DocumentStructure, int | None]:
+def build_structure(fmt: DocumentFormat, data: bytes, *, detail: bool = False) -> tuple[DocumentStructure, int | None]:
     """Adapter + structure builder, on the active parser backend."""
-    core = native_core()
+    core = None if detail else native_core()
     if core is not None and fmt in ("markdown", "text"):
         return DocumentStructure.model_validate_json(core.analyze_json(fmt, _decode(data))), None
     blocks, page_count = parse_blocks(data, fmt)
     if core is not None:
         payload = core.build_structure_json([_block_tuple(b) for b in blocks])
         return DocumentStructure.model_validate_json(payload), page_count
-    sections, totals = build_document_structure(blocks)
+    sections, totals = build_document_structure(blocks, detail=detail)
     return DocumentStructure(totals=totals, sections=sections), page_count
 
 
@@ -122,6 +122,7 @@ def analyze_document(
     filename: str | None = None,
     source_url: str | None = None,
     final_url: str | None = None,
+    detail: bool = False,
 ) -> DocumentAnalysisResponse:
     """
     Analyse one document and return its semantic structure — counts only.
@@ -137,7 +138,7 @@ def analyze_document(
     fmt, ctype = resolve_format(content_type, filename or final_url or source_url)
 
     t0 = time.monotonic()
-    structure, page_count = build_structure(fmt, data)
+    structure, page_count = build_structure(fmt, data, detail=detail)
     processing_ms = int((time.monotonic() - t0) * 1000)
 
     return DocumentAnalysisResponse(
@@ -152,14 +153,14 @@ def analyze_document(
         ),
         structure=structure,
         meta=DocumentMeta(
-            parser=active_parser(),  # type: ignore[arg-type]
+            parser="python" if detail else active_parser(),  # type: ignore[arg-type]
             processing_time_ms=processing_ms,
             analyzed_at=datetime.now(UTC),
         ),
     )
 
 
-async def analyze_document_url(url: str) -> DocumentAnalysisResponse:
+async def analyze_document_url(url: str, *, detail: bool = False) -> DocumentAnalysisResponse:
     """Fetch *url* (SSRF-checked, 10 s, 20 MB) and analyse it.
 
     Raises everything analyze_document raises, plus UrlNotAllowedError and
@@ -168,4 +169,6 @@ async def analyze_document_url(url: str) -> DocumentAnalysisResponse:
     from metabook_py.services.documents.fetch import fetch_document
 
     data, content_type, final_url = await fetch_document(url)
-    return analyze_document(data, content_type=content_type, source_url=url, final_url=final_url)
+    from starlette.concurrency import run_in_threadpool
+
+    return await run_in_threadpool(analyze_document, data, content_type=content_type, source_url=url, final_url=final_url, detail=detail)

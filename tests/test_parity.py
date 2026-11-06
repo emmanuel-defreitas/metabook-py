@@ -16,6 +16,9 @@ from pathlib import Path
 import pytest
 
 metabook_core = pytest.importorskip("metabook_core")
+# Without the built extension, the crate folder imports as an empty namespace package.
+if getattr(metabook_core, "__file__", None) is None:
+    pytest.skip("metabook_core extension is not built", allow_module_level=True)
 
 from metabook_py.core.config import settings  # noqa: E402
 from metabook_py.services import textstats  # noqa: E402

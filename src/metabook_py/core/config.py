@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     )
 
     gutendex_base_url: str = "https://gutendex.com"
+    open_library_enabled: bool = True
+    open_library_timeout: float = 5.0
+    open_library_user_agent: str = "MetaBook/1.0 (book metadata enrichment)"
     openalex_base_url: str = "https://api.openalex.org"
     openalex_api_key: SecretStr | None = None
     cache_ttl: int = 86400  # 24 hours in seconds
@@ -36,7 +39,7 @@ class Settings(BaseSettings):
     # every endpoint then behaves exactly as before.
     mongodb_uri: str = ""  # e.g. mongodb://localhost:27017 (MONGODB_URI)
     mongodb_db: str = "metabook"
-    # PostgreSQL takes precedence over MongoDB. Keep credentials in .env.local.
+    # MongoDB owns browser libraries; PostgreSQL is the legacy non-browser fallback.
     database_url: str = ""
     default_user_id: str | None = None
     app_name: str = "Book Structure API"

@@ -20,12 +20,18 @@ dist/
 
 # Editors / OS
 .DS_Store
-# Local checkout of Ely's GPUI pin. See example/Cargo.toml.
-example/.gpui
 .idea/
 .vscode/
 .vercel
 .env*
 
 # Rust
-rust/**/target/
+src/metabook_core/target/
+
+# Skill files the open-knowledge tool installs per agent
+.claude/skills/open-knowledge/
+.cursor/skills/open-knowledge/
+.codex/skills/open-knowledge/
+.github/skills/open-knowledge/
+.opencode/skills/open-knowledge/
+.pi/skills/open-knowledge/

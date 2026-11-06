@@ -10,6 +10,7 @@ Both call services/documents/service.py, as does the MCP tool analyze_document.
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from metabook_py.core.config import settings
 from metabook_py.core.exceptions import (
@@ -19,8 +20,11 @@ from metabook_py.core.exceptions import (
     UnsupportedDocumentTypeError,
     UrlNotAllowedError,
 )
+from metabook_py.core.identity import browser_user_id
 from metabook_py.models.document import AnalyzeUrlRequest, DocumentAnalysisResponse
 from metabook_py.services.documents.service import analyze_document, analyze_document_url
+from metabook_py.services.store import get_upload_store
+from metabook_py.services.user_library import UserLibraryStore
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -66,6 +70,15 @@ _DOC_ERRORS = (
 )
 
 
+async def _save_to_library(result: DocumentAnalysisResponse) -> None:
+    """Save the result to the caller's browser library, when there is one."""
+    if not browser_user_id.get():
+        return
+    store = get_upload_store()  # raises when MongoDB is not configured
+    if isinstance(store, UserLibraryStore):
+        result.record_id = await store.record_document(result)
+
+
 @router.post(
     "/analyze",
     response_model=DocumentAnalysisResponse,
@@ -74,6 +87,7 @@ _DOC_ERRORS = (
 )
 async def analyze_upload(
     file: Annotated[UploadFile, File(description="HTML, Markdown, PDF or plain-text file")],
+    detail: bool = False,
 ) -> DocumentAnalysisResponse:
     """
     Parse one document (HTML, Markdown, PDF or plain text) into a section tree
@@ -85,7 +99,11 @@ async def analyze_upload(
     # buffering arbitrarily large bodies.
     data = await file.read(settings.document_max_bytes + 1)
     try:
-        return analyze_document(data, content_type=file.content_type, filename=file.filename)
+        result = await run_in_threadpool(
+            analyze_document, data, content_type=file.content_type, filename=file.filename, detail=detail
+        )
+        await _save_to_library(result)
+        return result
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc
 
@@ -100,7 +118,7 @@ async def analyze_upload(
     },
     summary="Fetch a document by URL and analyse its semantic structure",
 )
-async def analyze_url(body: AnalyzeUrlRequest) -> DocumentAnalysisResponse:
+async def analyze_url(body: AnalyzeUrlRequest, detail: bool = False) -> DocumentAnalysisResponse:
     """
     Fetch a public http(s) URL (10 s limit, 20 MB, private addresses refused)
     and return the same structure as `POST /analyze`.
@@ -108,6 +126,8 @@ async def analyze_url(body: AnalyzeUrlRequest) -> DocumentAnalysisResponse:
     **No text content is included in the response.**
     """
     try:
-        return await analyze_document_url(str(body.url))
+        result = await analyze_document_url(str(body.url), detail=detail)
+        await _save_to_library(result)
+        return result
     except _DOC_ERRORS as exc:
         raise to_http_error(exc) from exc
